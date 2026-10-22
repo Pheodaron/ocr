@@ -12,6 +12,9 @@ class Settings(BaseSettings):
     data_dir: Path = Path("data")
     models_dir: Path = Path("models")
     cpu_threads: int = Field(4, ge=1, le=128)
+    cpu_threads_batch: int = Field(0, ge=0, le=128)
+    lighton_quantization: str = "Q8_0"
+    lighton_small_quantization: str = "Q8_0"
     dpi: int = Field(250, ge=72, le=600)
     retry_dpi: int = Field(350, ge=72, le=600)
     vlm_dpi: int = Field(150, ge=72, le=600)
@@ -43,6 +46,9 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_dpi(self):
+        for name in ("lighton_quantization", "lighton_small_quantization"):
+            if getattr(self, name) not in {"Q8_0", "Q5_K_M"}:
+                raise ValueError(f"{name}: use Q8_0 or Q5_K_M")
         if self.retry_dpi < self.dpi:
             raise ValueError("retry_dpi must be >= dpi")
         if not self.backends or set(self.backends) - LABELS.keys():
@@ -56,6 +62,10 @@ class Settings(BaseSettings):
         if self.kv_cache_type not in {"f16", "q8_0"}:
             raise ValueError("kv_cache_type: use f16 or q8_0")
         return self
+
+    @property
+    def batch_threads(self) -> int:
+        return self.cpu_threads_batch or self.cpu_threads
 
     @property
     def backends(self) -> list[str]:
@@ -82,6 +92,9 @@ class Settings(BaseSettings):
 
     def restore_recognition_config(self, config: dict) -> "Settings":
         config = dict(config)
+        config.setdefault("cpu_threads_batch", 0)
+        config.setdefault("lighton_quantization", "Q8_0")
+        config.setdefault("lighton_small_quantization", "Q8_0")
         # Jobs submitted before backend-specific resolution keep their original input size.
         config.setdefault("vlm_dpi", config.get("dpi", self.dpi))
         config.setdefault("dots_max_pixels", config.get("vlm_max_pixels", self.vlm_max_pixels))
@@ -98,6 +111,9 @@ class Settings(BaseSettings):
                 "layout_threshold",
                 "max_page_pixels",
                 "cpu_threads",
+                "cpu_threads_batch",
+                "lighton_quantization",
+                "lighton_small_quantization",
                 "dots_quantization",
                 "dots_context",
                 "glm_context",

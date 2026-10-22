@@ -94,7 +94,7 @@ Compose собирает CPU `llama-server` из
 commit `47a39665e7081dc482feec169961acc09750a5c4`.
 CUDA отключена при сборке; runtime передаёт `--n-gpu-layers 0`,
 `--no-mmproj-offload`, `--parallel 1`, `--offline`, `--fit off`.
-Для dots.mocr используется `--flash-attn auto`: llama.cpp выбирает доступный
+Для dots.mocr и Surya используется `--flash-attn auto`: llama.cpp выбирает доступный
 режим для decoder и vision encoder, включая CPU. Остальные GGUF backend
 сохраняют `--flash-attn off`. Запрошенный режим записывается в
 `engine.flash_attention`; это не подтверждение фактического включения.

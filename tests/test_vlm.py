@@ -160,7 +160,9 @@ def test_local_multimodal_http_contract_and_cpu_server_lifecycle(settings, monke
         assert recorded["request"]["chat_template_kwargs"]["enable_thinking"] is False
         assert "--skip-chat-parsing" in recorded["command"]
         command = recorded["command"]
-        expected_flash_attention = "auto" if backend in {"dots_mocr", "surya"} else "off"
+        expected_flash_attention = (
+            "auto" if backend in {"dots_mocr", "surya", "lighton", "lighton_small"} else "off"
+        )
         assert command[command.index("--flash-attn") + 1] == expected_flash_attention
         assert engine.metadata["flash_attention"] == expected_flash_attention
         assert command[command.index("--n-gpu-layers") + 1] == "0"

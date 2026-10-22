@@ -21,6 +21,7 @@ from .engine import InferenceProcessError, Prediction
 from .vlm_models import model_directory, verify_vlm
 
 LOGGER = logging.getLogger(__name__)
+FLASH_ATTENTION_AUTO_BACKENDS = {"dots_mocr", "surya", "lighton", "lighton_small"}
 
 
 def parent_death_signal():
@@ -62,7 +63,7 @@ def server_command(settings: Settings, backend: str, manifest: dict) -> list[str
         "--cache-type-v",
         "f16",
         "--flash-attn",
-        "auto" if backend in {"dots_mocr", "surya"} else "off",
+        "auto" if backend in FLASH_ATTENTION_AUTO_BACKENDS else "off",
         "--fit",
         "off",
         "--jinja",
@@ -147,7 +148,7 @@ class VLMEngine:
             "max_input_pixels": settings.vlm_image_budget(backend),
             "cache_type_k": settings.kv_cache_type,
             "cache_type_v": "f16",
-            "flash_attention": "auto" if backend in {"dots_mocr", "surya"} else "off",
+            "flash_attention": "auto" if backend in FLASH_ATTENTION_AUTO_BACKENDS else "off",
             "chat_output_parser": "content",
             "enable_thinking": False,
             "task": settings.glm_task if backend == "glm_ocr" else "layout",

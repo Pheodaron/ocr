@@ -66,6 +66,8 @@ def server_command(settings: Settings, backend: str, manifest: dict) -> list[str
         "--fit",
         "off",
         "--jinja",
+        # OCR needs the complete generated document, not chat reasoning/tool fields.
+        "--skip-chat-parsing",
         "--offline",
     ]
 
@@ -146,6 +148,8 @@ class VLMEngine:
             "cache_type_k": settings.kv_cache_type,
             "cache_type_v": "f16",
             "flash_attention": "auto" if backend == "dots_mocr" else "off",
+            "chat_output_parser": "content",
+            "enable_thinking": False,
             "task": settings.glm_task if backend == "glm_ocr" else "layout",
             "coordinates": "not normalized; generated dots boxes are retained only in raw output",
         }
@@ -285,6 +289,9 @@ class VLMEngine:
             "max_tokens": self.settings.vlm_max_tokens,
             "stream": False,
             "cache_prompt": False,
+            "reasoning_format": "none",
+            "parse_tool_calls": False,
+            "chat_template_kwargs": {"enable_thinking": False},
             "messages": [
                 {
                     "role": "user",
@@ -330,6 +337,20 @@ class VLMEngine:
                 )
             self._stop_process()
             raise failure from error
+        for choice in raw.get("choices", []):
+            message = choice.get("message", {})
+            LOGGER.info(
+                "VLM response backend=%s finish_reason=%s field_sizes=%s usage=%s timings=%s",
+                self.backend,
+                choice.get("finish_reason"),
+                {
+                    key: len(value)
+                    for key, value in message.items()
+                    if isinstance(value, (str, list))
+                },
+                raw.get("usage", {}),
+                raw.get("timings", {}),
+            )
         raw.update(
             ocr_backend=self.backend,
             ocr_task=self.settings.glm_task,

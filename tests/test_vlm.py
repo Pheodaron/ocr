@@ -88,7 +88,7 @@ def test_generative_review_does_not_trigger_unnecessary_dpi_retry(client, pdf_by
     assert all(len(page.passes) == 1 and page.needs_review for page in db.pages(job["id"]))
 
 
-@pytest.mark.parametrize("backend", ["glm_ocr", "dots_mocr"])
+@pytest.mark.parametrize("backend", ["glm_ocr", "dots_mocr", "lighton", "lighton_small"])
 def test_local_multimodal_http_contract_and_cpu_server_lifecycle(settings, monkeypatch, backend):
     import pymupdf
 
@@ -154,6 +154,11 @@ def test_local_multimodal_http_contract_and_cpu_server_lifecycle(settings, monke
         assert decoded.width * decoded.height >= expected_budget * 0.99
         assert engine.metadata["max_input_pixels"] == expected_budget
         assert recorded["request"]["temperature"] == 0
+        assert engine.metadata["chat_output_parser"] == "content"
+        assert recorded["request"]["reasoning_format"] == "none"
+        assert recorded["request"]["parse_tool_calls"] is False
+        assert recorded["request"]["chat_template_kwargs"]["enable_thinking"] is False
+        assert "--skip-chat-parsing" in recorded["command"]
         command = recorded["command"]
         expected_flash_attention = "auto" if backend == "dots_mocr" else "off"
         assert command[command.index("--flash-attn") + 1] == expected_flash_attention
@@ -323,3 +328,80 @@ def test_vlm_resize_is_visible_and_bboxes_still_refer_to_original_preview():
     page = adapt_vlm(raw, 1, 250, 2000, 3000)
     assert page.blocks[0].bbox == [0, 0, 2000, 3000]
     assert any("1000×1500" in warning for warning in page.warnings)
+
+
+def test_dots_recovers_only_explicit_ocr_layout_from_reasoning_field():
+    raw = response("dots_mocr", None)
+    raw["choices"][0]["message"]["reasoning_content"] = json.dumps(
+        [{"category": "Table", "text": "<table><tr><td>00125</td></tr></table>"}]
+    )
+    page = adapt_vlm(raw, 1, 150, 100, 100)
+    assert page.tables[0].cells[0].text == "00125"
+    assert page.needs_review
+    assert any("reasoning_content" in warning for warning in page.warnings)
+    assert raw["choices"][0]["message"]["content"] is None  # preserve the evidence
+
+
+@pytest.mark.parametrize(
+    "backend,reasoning",
+    [
+        ("dots_mocr", "Let me inspect the document. The contract might be 00125."),
+        ("dots_mocr", '[{"category": "Text", "text": "truncated'),
+        ("dots_mocr", '{"analysis": "00125"}'),
+        ("glm_ocr", '[{"category": "Text", "text": "00125"}]'),
+    ],
+)
+def test_reasoning_is_not_silently_presented_as_ocr(backend, reasoning):
+    raw = response(backend, "")
+    raw["choices"][0]["message"]["reasoning_content"] = reasoning
+    with pytest.raises(ValueError, match="completion_tokens=20") as error:
+        adapt_vlm(raw, 2, 150, 100, 100)
+    assert f"reasoning_chars={len(reasoning)}" in str(error.value)
+    assert "page-2-150.raw.json" in str(error.value)
+    assert reasoning not in str(error.value)
+
+
+def test_text_parts_and_final_content_take_priority_over_reasoning():
+    raw = response("dots_mocr", [{"type": "text", "text": '[{"category":"Text","text":"00125"}]'}])
+    raw["choices"][0]["message"]["reasoning_content"] = "This must not appear in OCR"
+    page = adapt_vlm(raw, 1, 150, 100, 100)
+    assert page.text == "00125"
+    assert not any("reasoning_content" in warning for warning in page.warnings)
+
+
+@pytest.mark.parametrize("backend", ["dots_mocr", "lighton_small"])
+def test_empty_vlm_response_is_saved_and_does_not_block_following_pages(
+    client, pdf_bytes, settings, backend
+):
+    from ocr_service.processing import document_path
+
+    job = client.post(
+        "/api/documents", files={"file": ("test.pdf", pdf_bytes)}, data={"backend": backend}
+    ).json()
+    answers = [response(backend, None), response(backend, ""), response(backend, "")]
+    answers[0]["choices"][0]["message"]["reasoning_content"] = "Not an OCR result"
+    layout = json.dumps([{"category": "Text", "text": "Договор 00125"}])
+    if backend == "dots_mocr":
+        answers[1]["choices"][0]["message"]["reasoning_content"] = layout
+        answers[2]["choices"][0]["message"]["content"] = layout
+    else:
+        grounded = "![text](0,0,1000,1000)\nДоговор 00125"
+        answers[1]["choices"][0]["message"]["content"] = grounded
+        answers[2]["choices"][0]["message"]["content"] = grounded
+    engine = Mock(metadata={"name": "contract-fixture"}, retry_on_review=False)
+    pending = iter(answers)
+    engine.recognize.side_effect = lambda image, **kwargs: Prediction(
+        raw=next(pending), image=image, format="vlm"
+    )
+    db = client.app.state.db
+    process_job(db, db.claim_job(), engine, settings)
+    pages = db.pages(job["id"])
+    assert [page.status for page in pages] == ["failed", "completed", "completed"]
+    assert pages[1].text == pages[2].text
+    assert "Договор 00125" in pages[1].text
+    if backend == "lighton_small":
+        assert pages[1].blocks[0].text == "Договор 00125"
+    assert engine.recognize.call_count == 3
+    saved = document_path(settings, job["id"]) / "page-1-150.raw.json"
+    assert json.loads(saved.read_text()) == answers[0]
+    assert db.summary(job["id"]).status == "partial"

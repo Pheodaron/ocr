@@ -20,11 +20,57 @@ def unfence(text: str) -> str:
 
 def adapt_vlm(raw: dict, number: int, dpi: int, width: int, height: int) -> PageResult:
     choice = raw["choices"][0]
-    content = choice["message"].get("content")
-    if not isinstance(content, str) or not content.strip():
-        raise ValueError("VLM вернула пустой ответ")
-    content = unfence(content)
+    message = choice["message"]
+    content = message.get("content")
     warnings = ["Генеративный OCR: оценка confidence отсутствует; проверьте текст и числа"]
+    # Some chat servers return typed text parts rather than a single string.
+    if isinstance(content, list):
+        content = "\n".join(
+            part["text"]
+            for part in content
+            if isinstance(part, dict)
+            and part.get("type") in {"text", "output_text"}
+            and isinstance(part.get("text"), str)
+        )
+    if (not isinstance(content, str) or not content.strip()) and raw["ocr_backend"] == "dots_mocr":
+        reasoning = message.get("reasoning_content")
+        # Recover only an explicit OCR layout, never arbitrary model reasoning.
+        if isinstance(reasoning, str):
+            try:
+                layout = json.loads(unfence(reasoning))
+                if isinstance(layout, dict):
+                    layout = layout.get(
+                        "layout", layout.get("blocks", layout.get("elements", [layout]))
+                    )
+                if (
+                    isinstance(layout, list)
+                    and 0 < len(layout) <= 10000
+                    and all(
+                        isinstance(item, dict) and isinstance(item.get("category"), str)
+                        for item in layout
+                    )
+                    and any(
+                        isinstance(item.get("text"), str) and item["text"].strip()
+                        for item in layout
+                    )
+                ):
+                    content = reasoning
+                    warnings.append(
+                        "OCR layout восстановлен из reasoning_content; проверьте результат"
+                    )
+            except (ValueError, TypeError):
+                pass
+    if not isinstance(content, str) or not content.strip():
+        reasoning = message.get("reasoning_content")
+        raise ValueError(
+            "VLM вернула пустой ответ "
+            f"(finish_reason={choice.get('finish_reason')}; "
+            f"completion_tokens={raw.get('usage', {}).get('completion_tokens')}; "
+            f"message_fields={','.join(sorted(message))}; "
+            f"reasoning_chars={len(reasoning) if isinstance(reasoning, str) else 0}). "
+            f"Исходный ответ сохранён в page-{number}-{dpi}.raw.json"
+        )
+    content = unfence(content)
     if choice.get("finish_reason") != "stop":
         warnings.append(f"Генерация не завершена штатно: {choice.get('finish_reason')}")
     preprocessing = raw.get("image_preprocessing", {})

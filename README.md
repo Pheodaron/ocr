@@ -157,7 +157,7 @@ JSON имеет `schema_version: "1.0"`, SHA256 исходного PDF, свед
 | `chandra` | datalab-to/chandra-ocr-2 | Q5_K_M + свой mmproj Q8_0 | llama.cpp, HTML с layout |
 | `lighton` | lightonai/LightOnOCR-3-1B | Q8_0 + свой mmproj Q8_0 | llama.cpp, grounding + Markdown/HTML |
 | `kdl` | KDLAI/KDL-Frontier-Parser-nano | Исходные safetensors, CPU FP32 | Transformers: layout → crop → recognition → OTSL |
-| `lighton_small` | lightonai/LightOnOCR-3-0.8B | Q8_0 + свой mmproj Q8_0 | llama.cpp, grounding |
+| `lighton_small` | lightonai/LightOnOCR-3-0.8B | prithivMLmods Q4_K_M + свой mmproj Q8_0 | llama.cpp, transcription; [настройка](docs/lighton-q4.md) |
 | `jina` | jinaai/jina-ocr-v1 | Q8_0 + свой mmproj F16 | llama.cpp с RoPE-поправкой, Markdown |
 | `surya` | datalab-to/surya-ocr-2 | Официальный F16 GGUF + mmproj | llama.cpp, HTML с layout |
 | `falcon` | tiiuae/Falcon-OCR v1.5 | Исходные safetensors, CPU FP32 | Transformers с адаптацией Triton-операций под CPU |

@@ -256,7 +256,7 @@ dots/GLM — MIT; LightOnOCR-3 — Apache-2.0; KDL — AGPL-3.0 по карто�
 
 | Backend / профиль | Модель | Веса / образ |
 | --- | --- | --- |
-| `lighton_small` | [lightonai/LightOnOCR-3-0.8B](https://huggingface.co/lightonai/LightOnOCR-3-0.8B) | [GGUF prithivMLmods](https://huggingface.co/prithivMLmods/LightOnOCR-3-0.8B-GGUF), decoder и свой mmproj Q8_0; образ `vlm` |
+| `lighton_small` | [lightonai/LightOnOCR-3-0.8B](https://huggingface.co/lightonai/LightOnOCR-3-0.8B) | [prithivMLmods Q4_K_M](https://huggingface.co/prithivMLmods/LightOnOCR-3-0.8B-GGUF), прежний Q8 vision; Q8 decoder доступен для сравнения; образ `vlm` |
 | `jina` | [jinaai/jina-ocr-v1](https://huggingface.co/jinaai/jina-ocr-v1) | [GGUF ahmadw](https://huggingface.co/ahmadw/jina-ocr-v1-GGUF), Q8_0 + mmproj F16; отдельный образ `jina` |
 | `surya` | [datalab-to/surya-ocr-2](https://huggingface.co/datalab-to/surya-ocr-2) | [Официальный GGUF](https://huggingface.co/datalab-to/surya-ocr-2-gguf), decoder и mmproj F16; образ `vlm` |
 | `falcon` | [tiiuae/Falcon-OCR](https://huggingface.co/tiiuae/Falcon-OCR), v1.5 | Исходные safetensors, FP32; отдельный образ `falcon` |
@@ -264,9 +264,12 @@ dots/GLM — MIT; LightOnOCR-3 — Apache-2.0; KDL — AGPL-3.0 по карто�
 
 ### LightOnOCR-3-0.8B
 
+По умолчанию: prithivMLmods Q4_K_M, пустой промпт, до восьми физических ядер.
+[Параметры, веса и проверка](lighton-q4.md).
+
 Самостоятельный checkpoint на базе Qwen3.5. Он не использует decoder или projector
-версии 1B. Маршрут: render → llama.cpp → `grounding` → Markdown/HTML и нормализованные
-bbox. Адаптер общий с 1B, веса и сервисы разные.
+версии 1B. Маршрут: render → llama.cpp → transcription либо grounding → Markdown/HTML.
+Нормализованные bbox доступны в grounding. Адаптер общий с 1B, веса и сервисы разные.
 
 ### Jina OCR v1
 

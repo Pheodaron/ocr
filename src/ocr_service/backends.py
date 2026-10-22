@@ -10,6 +10,8 @@ def configuration_details(backend: str, config: dict) -> dict:
         "label": LABELS.get(backend, backend),
         "quantization": config.get("dots_quantization", "Q5_K_M")
         if backend == "dots_mocr"
+        else config.get("lighton_small_quantization", "Q8_0")
+        if backend == "lighton_small"
         else "Q8_0"
         if backend in {"glm_ocr", "lighton", "lighton_small", "jina"}
         else "Q5_K_M"
@@ -28,7 +30,11 @@ def configuration_details(backend: str, config: dict) -> dict:
         else config.get("vlm_context", 16384)
         if backend in VLM_BACKENDS
         else None,
-        "task": config.get("glm_task", "text") if backend == "glm_ocr" else None,
+        "task": config.get("glm_task", "text")
+        if backend == "glm_ocr"
+        else config.get("lighton_small_task", "grounding")
+        if backend == "lighton_small"
+        else None,
         "render_dpi": config.get("dpi", 250)
         if backend == "paddle"
         else config.get("vlm_dpi", config.get("dpi", 250)),

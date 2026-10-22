@@ -12,11 +12,13 @@ import subprocess
 import time
 import urllib.error
 import urllib.request
+from functools import partial
 from pathlib import Path
 
 import pymupdf
 
 from .config import Settings
+from .cpu import physical_cpu_ids
 from .engine import InferenceProcessError, Prediction
 from .vlm_models import model_directory, verify_vlm
 
@@ -24,17 +26,35 @@ LOGGER = logging.getLogger(__name__)
 FLASH_ATTENTION_AUTO_BACKENDS = {"dots_mocr", "surya", "lighton", "lighton_small"}
 
 
-def parent_death_signal():
+def parent_death_signal(cpu_ids=None):
     # Linux worker runs in a separate process. Kill its server on a native crash/OOM too.
     parent = os.getppid()
     ctypes.CDLL(None).prctl(1, signal.SIGTERM)
     if os.getppid() != parent:
         os.kill(os.getpid(), signal.SIGTERM)
+    if cpu_ids:
+        os.sched_setaffinity(0, cpu_ids)
 
 
-def server_command(settings: Settings, backend: str, manifest: dict) -> list[str]:
+def server_command(settings: Settings, backend: str, manifest: dict, *, cpu_ids=None) -> list[str]:
     directory = model_directory(backend, settings).resolve()
     context = context_size(settings, backend)
+    threads = settings.lighton_small_threads if backend == "lighton_small" else settings.cpu_threads
+    if cpu_ids:
+        threads = min(threads, len(cpu_ids))
+    affinity = []
+    if cpu_ids:
+        mask = format(sum(1 << cpu for cpu in cpu_ids), "x")
+        affinity = [
+            "--cpu-mask",
+            mask,
+            "--cpu-strict",
+            "1",
+            "--cpu-mask-batch",
+            mask,
+            "--cpu-strict-batch",
+            "1",
+        ]
     return [
         settings.llama_server,
         "--model",
@@ -51,9 +71,10 @@ def server_command(settings: Settings, backend: str, manifest: dict) -> list[str
         "0",
         "--no-mmproj-offload",
         "--threads",
-        str(settings.cpu_threads),
+        str(threads),
         "--threads-batch",
-        str(settings.cpu_threads),
+        str(threads),
+        *affinity,
         "--ctx-size",
         str(context),
         "--parallel",
@@ -111,6 +132,18 @@ class VLMEngine:
     def __init__(self, settings: Settings, backend: str):
         self.settings = settings
         self.backend = backend
+        self.cpu_ids = (
+            physical_cpu_ids(settings.lighton_small_threads)
+            if backend == "lighton_small" and settings.lighton_small_pin_threads
+            else None
+        )
+        self.cpu_threads = (
+            min(settings.lighton_small_threads, len(self.cpu_ids))
+            if self.cpu_ids
+            else settings.lighton_small_threads
+            if backend == "lighton_small"
+            else settings.cpu_threads
+        )
         self.process = None
         self.log = None
         manifest = verify_vlm(backend, settings)
@@ -123,7 +156,9 @@ class VLMEngine:
                 "Table Recognition:" if settings.glm_task == "table" else "Text Recognition:"
             ),
             "lighton": lambda: "grounding",
-            "lighton_small": lambda: "grounding",
+            "lighton_small": lambda: (
+                "grounding" if settings.lighton_small_task == "grounding" else ""
+            ),
             "jina": lambda: (
                 "Transcribe the provided document image into a clean Markdown format, "
                 "preserving the natural reading order."
@@ -143,7 +178,8 @@ class VLMEngine:
             "prompt": self.prompt,
             "temperature": 0,
             "seed": 42,
-            "cpu_threads": settings.cpu_threads,
+            "cpu_threads": self.cpu_threads,
+            "cpu_affinity": self.cpu_ids,
             "context": context_size(settings, backend),
             "max_input_pixels": settings.vlm_image_budget(backend),
             "cache_type_k": settings.kv_cache_type,
@@ -151,7 +187,11 @@ class VLMEngine:
             "flash_attention": "auto" if backend in FLASH_ATTENTION_AUTO_BACKENDS else "off",
             "chat_output_parser": "content",
             "enable_thinking": False,
-            "task": settings.glm_task if backend == "glm_ocr" else "layout",
+            "task": settings.glm_task
+            if backend == "glm_ocr"
+            else settings.lighton_small_task
+            if backend == "lighton_small"
+            else "layout",
             "coordinates": "not normalized; generated dots boxes are retained only in raw output",
         }
         # Never send loopback inference through an HTTP proxy inherited by the worker.
@@ -175,11 +215,22 @@ class VLMEngine:
             with socket.socket() as probe:
                 probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
                 probe.bind(("127.0.0.1", self.settings.llama_port))
+            environment = dict(os.environ)
+            if self.backend == "lighton_small":
+                for key in (
+                    "OMP_NUM_THREADS",
+                    "OPENBLAS_NUM_THREADS",
+                    "MKL_NUM_THREADS",
+                    "NUMEXPR_NUM_THREADS",
+                    "RAYON_NUM_THREADS",
+                ):
+                    environment[key] = str(self.cpu_threads)
             self.process = subprocess.Popen(
-                server_command(self.settings, self.backend, self.manifest),
+                server_command(self.settings, self.backend, self.manifest, cpu_ids=self.cpu_ids),
                 stdout=self.log,
                 stderr=subprocess.STDOUT,
-                preexec_fn=parent_death_signal,
+                preexec_fn=partial(parent_death_signal, cpu_ids=self.cpu_ids),
+                env=environment,
             )
             deadline = time.monotonic() + self.settings.vlm_startup_seconds
             while time.monotonic() < deadline:
@@ -304,7 +355,7 @@ class VLMEngine:
                                 + base64.b64encode(png).decode("ascii")
                             },
                         },
-                        {"type": "text", "text": self.prompt},
+                        *([{"type": "text", "text": self.prompt}] if self.prompt else []),
                     ],
                 }
             ],

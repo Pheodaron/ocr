@@ -25,10 +25,13 @@ def artifacts(backend: str, settings: Settings) -> dict:
         "lighton_small": (
             "prithivMLmods/LightOnOCR-3-0.8B-GGUF",
             "414757bdb78fd07c947a1e83c2b8d7e9a8b73583",
-            "Q8_0",
-            "LightOnOCR-3-0.8B.Q8_0.gguf",
+            settings.lighton_small_quantization,
+            f"LightOnOCR-3-0.8B.{settings.lighton_small_quantization}.gguf",
             "LightOnOCR-3-0.8B.mmproj-q8_0.gguf",
-            "660a8931ba33c8a604076f69b8785b36eadcdb1cc90004e9f89bf67615a0456d",
+            {
+                "Q8_0": "660a8931ba33c8a604076f69b8785b36eadcdb1cc90004e9f89bf67615a0456d",
+                "Q4_K_M": "290ba9b31716a00dc1cbe1555a2776109f21ae3f4f5c177a2b543c9bc3eab12a",
+            }[settings.lighton_small_quantization],
             "a8b9b3b01b6c780747b48e0807ef5b753c54f27aa4c23962c3c7d5ace2ed0233",
         ),
         "jina": (

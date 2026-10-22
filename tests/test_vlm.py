@@ -88,8 +88,20 @@ def test_generative_review_does_not_trigger_unnecessary_dpi_retry(client, pdf_by
     assert all(len(page.passes) == 1 and page.needs_review for page in db.pages(job["id"]))
 
 
-@pytest.mark.parametrize("backend", ["glm_ocr", "dots_mocr", "lighton", "lighton_small", "surya"])
-def test_local_multimodal_http_contract_and_cpu_server_lifecycle(settings, monkeypatch, backend):
+@pytest.mark.parametrize(
+    "backend,task",
+    [
+        ("glm_ocr", "transcription"),
+        ("dots_mocr", "transcription"),
+        ("lighton", "transcription"),
+        ("lighton_small", "transcription"),
+        ("lighton_small", "grounding"),
+        ("surya", "transcription"),
+    ],
+)
+def test_local_multimodal_http_contract_and_cpu_server_lifecycle(
+    settings, monkeypatch, backend, task
+):
     import pymupdf
 
     from ocr_service import vlm
@@ -98,7 +110,9 @@ def test_local_multimodal_http_contract_and_cpu_server_lifecycle(settings, monke
     with socket.socket() as probe:
         probe.bind(("127.0.0.1", 0))
         port = probe.getsockname()[1]
-    settings = settings.model_copy(update={"llama_port": port})
+    settings = settings.model_copy(
+        update={"llama_port": port, "lighton_small_task": task, "cpu_threads": 20}
+    )
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *_args):
@@ -118,6 +132,7 @@ def test_local_multimodal_http_contract_and_cpu_server_lifecycle(settings, monke
     class Process:
         def __init__(self, command, **_kwargs):
             recorded["command"] = command
+            recorded["environment"] = _kwargs["env"]
             self.server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
             self.thread = threading.Thread(target=self.server.serve_forever)
             self.thread.start()
@@ -138,6 +153,7 @@ def test_local_multimodal_http_contract_and_cpu_server_lifecycle(settings, monke
 
     manifest = {"model": "model.gguf", "projector": "projector.gguf"}
     monkeypatch.setattr(vlm, "verify_vlm", lambda *_args: manifest)
+    monkeypatch.setattr(vlm, "physical_cpu_ids", lambda *_: [0, 2, 4, 6, 8, 10, 12, 14])
     monkeypatch.setattr(VLMEngine, "_version", lambda _self: "test-fixture")
     monkeypatch.setattr(vlm.subprocess, "Popen", Process)
     engine = VLMEngine(settings, backend)
@@ -145,7 +161,11 @@ def test_local_multimodal_http_contract_and_cpu_server_lifecycle(settings, monke
         prediction = engine.recognize(np.zeros((2400, 1800, 3), dtype=np.uint8))
         assert prediction.format == "vlm"
         content = recorded["request"]["messages"][0]["content"]
-        assert content[1]["text"] == engine.prompt
+        if backend == "lighton_small" and task == "transcription":
+            assert len(content) == 1 and content[0]["type"] == "image_url"
+            assert engine.prompt == ""
+        else:
+            assert content[1]["text"] == engine.prompt
         assert recorded["request"]["model"] == backend
         image_url = content[0]["image_url"]["url"]
         decoded = pymupdf.Pixmap(base64.b64decode(image_url.split(",")[1]))
@@ -160,6 +180,17 @@ def test_local_multimodal_http_contract_and_cpu_server_lifecycle(settings, monke
         assert recorded["request"]["chat_template_kwargs"]["enable_thinking"] is False
         assert "--skip-chat-parsing" in recorded["command"]
         command = recorded["command"]
+        expected_threads = "8" if backend == "lighton_small" else "20"
+        assert command[command.index("--threads") + 1] == expected_threads
+        assert command[command.index("--threads-batch") + 1] == expected_threads
+        if backend == "lighton_small":
+            assert command[command.index("--cpu-mask") + 1] == "5555"
+            assert command[command.index("--cpu-strict") + 1] == "1"
+            assert recorded["environment"]["OMP_NUM_THREADS"] == "8"
+            assert engine.metadata["cpu_threads"] == 8
+            assert engine.metadata["cpu_affinity"] == [0, 2, 4, 6, 8, 10, 12, 14]
+        else:
+            assert "--cpu-mask" not in command
         expected_flash_attention = (
             "auto" if backend in {"dots_mocr", "surya", "lighton", "lighton_small"} else "off"
         )
@@ -170,12 +201,10 @@ def test_local_multimodal_http_contract_and_cpu_server_lifecycle(settings, monke
     finally:
         engine.close()
     assert recorded["closed"]
-    assert (
-        server_command(settings.model_copy(update={"glm_context": 131072}), "glm_ocr", manifest)[
-            command.index("--ctx-size") + 1
-        ]
-        == "131072"
+    glm_command = server_command(
+        settings.model_copy(update={"glm_context": 131072}), "glm_ocr", manifest
     )
+    assert glm_command[glm_command.index("--ctx-size") + 1] == "131072"
 
 
 def test_server_crash_skips_higher_dpi_and_next_page_restarts_server(

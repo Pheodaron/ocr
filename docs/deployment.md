@@ -257,6 +257,10 @@ podman compose --profile glm_ocr up -d
 | --- | --- |
 | `OCR_DOTS_QUANTIZATION` | `Q5_K_M`, `Q8_0` или `BF16`; требуется подготовка выбранных весов |
 | `OCR_GLM_TASK` | `text` для страницы или `table` для табличного запроса |
+| `OCR_LIGHTON_SMALL_QUANTIZATION` | prithivMLmods `Q4_K_M` по умолчанию или прежний `Q8_0`; [LightOn 0.8B на CPU](lighton-q4.md) |
+| `OCR_LIGHTON_SMALL_TASK` | `transcription` (пустой промпт) или `grounding` |
+| `OCR_LIGHTON_SMALL_THREADS` | 8 по умолчанию; диапазон 1–8 для LightOn 0.8B, независимо от общего `OCR_CPU_THREADS` |
+| `OCR_LIGHTON_SMALL_PIN_THREADS` | true: по одному разрешённому CPU на физическое ядро; фактическая маска в engine.cpu_affinity |
 | `OCR_DPI`, `OCR_RETRY_DPI` | Только PP-StructureV3: основной рендер 250 dpi и повтор 350 dpi |
 | `OCR_VLM_DPI` | Все остальные модели: рендер 150 dpi, один проход без повышения DPI при ошибке |
 | `OCR_VLM_MAX_PIXELS` | Максимальная площадь изображения для llama.cpp, по умолчанию 2 500 000: сохраняет A4/Letter при 150 dpi без уменьшения; preview сохраняет исходный DPI |

@@ -12,6 +12,10 @@ class Settings(BaseSettings):
     data_dir: Path = Path("data")
     models_dir: Path = Path("models")
     cpu_threads: int = Field(4, ge=1, le=128)
+    lighton_small_quantization: str = "Q4_K_M"
+    lighton_small_task: str = "transcription"
+    lighton_small_threads: int = Field(8, ge=1, le=8)
+    lighton_small_pin_threads: bool = True
     dpi: int = Field(250, ge=72, le=600)
     retry_dpi: int = Field(350, ge=72, le=600)
     vlm_dpi: int = Field(150, ge=72, le=600)
@@ -43,6 +47,10 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_dpi(self):
+        if self.lighton_small_quantization not in {"Q8_0", "Q4_K_M"}:
+            raise ValueError("lighton_small_quantization: use Q8_0 or Q4_K_M")
+        if self.lighton_small_task not in {"transcription", "grounding"}:
+            raise ValueError("lighton_small_task: use transcription or grounding")
         if self.retry_dpi < self.dpi:
             raise ValueError("retry_dpi must be >= dpi")
         if not self.backends or set(self.backends) - LABELS.keys():
@@ -82,6 +90,8 @@ class Settings(BaseSettings):
 
     def restore_recognition_config(self, config: dict) -> "Settings":
         config = dict(config)
+        config.setdefault("lighton_small_quantization", "Q8_0")
+        config.setdefault("lighton_small_task", "grounding")
         # Jobs submitted before backend-specific resolution keep their original input size.
         config.setdefault("vlm_dpi", config.get("dpi", self.dpi))
         config.setdefault("dots_max_pixels", config.get("vlm_max_pixels", self.vlm_max_pixels))
@@ -98,6 +108,10 @@ class Settings(BaseSettings):
                 "layout_threshold",
                 "max_page_pixels",
                 "cpu_threads",
+                "lighton_small_quantization",
+                "lighton_small_task",
+                "lighton_small_threads",
+                "lighton_small_pin_threads",
                 "dots_quantization",
                 "dots_context",
                 "glm_context",

@@ -66,10 +66,12 @@ OCR_PORT=8000
 OCR_CPU_THREADS=4
 OCR_DPI=250
 OCR_RETRY_DPI=350
+OCR_VLM_DPI=150
 OCR_ALLOW_MODEL_DOWNLOAD=true
 OCR_GLM_CONTEXT=16384
 OCR_VLM_MAX_TOKENS=8192
 OCR_VLM_MAX_PIXELS=1500000
+OCR_DOTS_MAX_PIXELS=1000000
 ```
 
 `OCR_CPU_THREADS` выбирайте с учётом ресурсов хоста. Для GLM не начинайте
@@ -255,7 +257,10 @@ podman compose --profile glm_ocr up -d
 | --- | --- |
 | `OCR_DOTS_QUANTIZATION` | `Q5_K_M`, `Q8_0` или `BF16`; требуется подготовка выбранных весов |
 | `OCR_GLM_TASK` | `text` для страницы или `table` для табличного запроса |
+| `OCR_DPI`, `OCR_RETRY_DPI` | Только PP-StructureV3: основной рендер 250 dpi и повтор 350 dpi |
+| `OCR_VLM_DPI` | Все остальные модели: рендер 150 dpi, один проход без повышения DPI при ошибке |
 | `OCR_VLM_MAX_PIXELS` | Максимальная площадь изображения для llama.cpp, по умолчанию 1 500 000; preview сохраняет исходный DPI. Уменьшение снижает RAM, но может ухудшать мелкий текст |
+| `OCR_DOTS_MAX_PIXELS` | Дополнительный лимит dots.mocr, по умолчанию 1 000 000; применяется меньший из этого значения и `OCR_VLM_MAX_PIXELS` |
 | `OCR_VLM_MAX_TOKENS` | Бюджет ответа; при обрыве увеличьте с учётом контекста и RAM |
 | `OCR_VLM_STARTUP_SECONDS` | Ожидание загрузки llama-server, по умолчанию 300 секунд |
 | `OCR_VLM_TIMEOUT_SECONDS` | Таймаут запроса генерации, по умолчанию 3600 секунд |
@@ -426,11 +431,13 @@ podman ps -a
 podman compose --profile nemotron logs --tail=100 models-nemotron nemotron api
 ```
 
-Если dots.mocr убит OOM-killer, начните новый прогон с ограничением входа
-и меньшим контекстом. В `.env`:
+Если dots.mocr работает слишком долго или убит OOM-killer, начните новый
+прогон с ограничением входа и меньшим контекстом. В `.env`:
 
 ```dotenv
 OCR_VLM_MAX_PIXELS=1500000
+OCR_VLM_DPI=150
+OCR_DOTS_MAX_PIXELS=1000000
 OCR_DOTS_CONTEXT=16384
 ```
 
@@ -441,8 +448,16 @@ OCR_DOTS_CONTEXT=16384
 podman compose --profile dots_mocr up --build --force-recreate -d
 ```
 
-При необходимости уменьшайте `OCR_VLM_MAX_PIXELS` дальше, оценивая читаемость
-мелкого текста. Не рассчитывайте RAM только по размеру GGUF: vision encoder,
+Для A4 лимит в миллион пикселей соответствует примерно 840×1190 px, то есть
+около 102 dpi после уменьшения. Это начальный компромисс для CPU, а не гарантия
+читаемости: мелкие цифры в таблицах могут потеряться. Если они распознаются
+хуже, увеличьте `OCR_DOTS_MAX_PIXELS` до 1500000. Для остальных llama.cpp
+моделей действует общий лимит; KDL/Falcon/Nemotron используют свои processors.
+Простое снижение DPI с 250 до 150 ускоряет рендер PDF, но при прежнем лимите
+пикселей почти не меняет работу vision encoder. Генерация длинного JSON/HTML
+на CPU тоже может занимать минуты, даже при небольшом изображении.
+
+Не рассчитывайте RAM только по размеру GGUF: vision encoder,
 attention и KV-cache требуют дополнительной памяти. Ранее завершённые ошибкой
 задания автоматически не переобрабатываются.
 

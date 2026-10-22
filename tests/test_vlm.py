@@ -88,7 +88,10 @@ def test_generative_review_does_not_trigger_unnecessary_dpi_retry(client, pdf_by
     assert all(len(page.passes) == 1 and page.needs_review for page in db.pages(job["id"]))
 
 
-def test_local_multimodal_http_contract_and_cpu_server_lifecycle(settings, monkeypatch):
+@pytest.mark.parametrize("backend", ["glm_ocr", "dots_mocr"])
+def test_local_multimodal_http_contract_and_cpu_server_lifecycle(settings, monkeypatch, backend):
+    import pymupdf
+
     from ocr_service import vlm
 
     recorded = {}
@@ -137,14 +140,19 @@ def test_local_multimodal_http_contract_and_cpu_server_lifecycle(settings, monke
     monkeypatch.setattr(vlm, "verify_vlm", lambda *_args: manifest)
     monkeypatch.setattr(VLMEngine, "_version", lambda _self: "test-fixture")
     monkeypatch.setattr(vlm.subprocess, "Popen", Process)
-    engine = VLMEngine(settings, "glm_ocr")
+    engine = VLMEngine(settings, backend)
     try:
-        prediction = engine.recognize(np.zeros((20, 30, 3), dtype=np.uint8))
+        prediction = engine.recognize(np.zeros((1500, 1200, 3), dtype=np.uint8))
         assert prediction.format == "vlm"
         content = recorded["request"]["messages"][0]["content"]
-        assert content[1]["text"] == "Text Recognition:"
+        assert content[1]["text"] == engine.prompt
+        assert recorded["request"]["model"] == backend
         image_url = content[0]["image_url"]["url"]
-        assert base64.b64decode(image_url.split(",")[1]).startswith(b"\x89PNG")
+        decoded = pymupdf.Pixmap(base64.b64decode(image_url.split(",")[1]))
+        expected_budget = 1_000_000 if backend == "dots_mocr" else 1_500_000
+        assert decoded.width * decoded.height <= expected_budget
+        assert decoded.width * decoded.height >= expected_budget * 0.99
+        assert engine.metadata["max_input_pixels"] == expected_budget
         assert recorded["request"]["temperature"] == 0
         command = recorded["command"]
         assert command[command.index("--n-gpu-layers") + 1] == "0"

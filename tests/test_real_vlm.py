@@ -23,7 +23,7 @@ def test_real_vlm_page(backend, pdf_bytes, tmp_path):
     source.write_bytes(pdf_bytes)
     engine = create_engine(backend, settings)
     try:
-        page = process_page(engine, source, 1, tmp_path, settings)
+        page = process_page(engine, source, 1, tmp_path, settings, backend=backend)
         assert page.text.strip(), "Real model returned no readable text"
         assert "Document" in page.text and "1" in page.text
         assert page.confidence is None

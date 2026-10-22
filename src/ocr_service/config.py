@@ -14,6 +14,7 @@ class Settings(BaseSettings):
     cpu_threads: int = Field(4, ge=1, le=128)
     dpi: int = Field(250, ge=72, le=600)
     retry_dpi: int = Field(350, ge=72, le=600)
+    vlm_dpi: int = Field(150, ge=72, le=600)
     review_threshold: float = Field(0.75, ge=0, le=1)
     layout_threshold: float = Field(0.5, ge=0, le=1)
     max_upload_mb: int = Field(64, ge=1, le=1024)
@@ -29,6 +30,7 @@ class Settings(BaseSettings):
     glm_context: int = Field(16384, ge=2048, le=131072)
     glm_task: str = "text"
     vlm_max_pixels: int = Field(1_500_000, ge=65_536, le=30_000_000)
+    dots_max_pixels: int = Field(1_000_000, ge=65_536, le=30_000_000)
     vlm_max_tokens: int = Field(8192, ge=128, le=65536)
     vlm_timeout_seconds: int = Field(3600, ge=10)
     vlm_startup_seconds: int = Field(300, ge=10)
@@ -68,12 +70,30 @@ class Settings(BaseSettings):
     def setup(self) -> None:
         (self.data_dir / "documents").mkdir(parents=True, exist_ok=True)
 
+    def render_dpis(self, backend: str) -> list[int]:
+        if backend != "paddle":
+            return [self.vlm_dpi]
+        return list(dict.fromkeys([self.dpi, self.retry_dpi]))
+
+    def vlm_image_budget(self, backend: str) -> int:
+        if backend == "dots_mocr":
+            return min(self.vlm_max_pixels, self.dots_max_pixels)
+        return self.vlm_max_pixels
+
+    def restore_recognition_config(self, config: dict) -> "Settings":
+        config = dict(config)
+        # Jobs submitted before backend-specific resolution keep their original input size.
+        config.setdefault("vlm_dpi", config.get("dpi", self.dpi))
+        config.setdefault("dots_max_pixels", config.get("vlm_max_pixels", self.vlm_max_pixels))
+        return Settings.model_validate({**self.model_dump(), **config})
+
     def recognition_config(self) -> dict:
         return self.model_dump(
             mode="json",
             include={
                 "dpi",
                 "retry_dpi",
+                "vlm_dpi",
                 "review_threshold",
                 "layout_threshold",
                 "max_page_pixels",
@@ -84,6 +104,7 @@ class Settings(BaseSettings):
                 "glm_task",
                 "vlm_max_tokens",
                 "vlm_max_pixels",
+                "dots_max_pixels",
                 "kv_cache_type",
                 "vlm_timeout_seconds",
                 "vlm_context",

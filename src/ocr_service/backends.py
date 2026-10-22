@@ -29,6 +29,18 @@ def configuration_details(backend: str, config: dict) -> dict:
         if backend in VLM_BACKENDS
         else None,
         "task": config.get("glm_task", "text") if backend == "glm_ocr" else None,
+        "render_dpi": config.get("dpi", 250)
+        if backend == "paddle"
+        else config.get("vlm_dpi", config.get("dpi", 250)),
+        "retry_dpi": config.get("retry_dpi", 350) if backend == "paddle" else None,
+        "max_input_pixels": min(
+            config.get("vlm_max_pixels", 1_500_000),
+            config.get("dots_max_pixels", config.get("vlm_max_pixels", 1_500_000)),
+        )
+        if backend == "dots_mocr"
+        else config.get("vlm_max_pixels", 1_500_000)
+        if backend in VLM_BACKENDS
+        else None,
     }
 
 

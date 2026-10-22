@@ -16,7 +16,7 @@ from .processing import process_job
 def run_document(settings: Settings, job_id: str, engine_factory=create_engine) -> None:
     db = Database(settings.db_path)
     job = db.get_job(job_id)
-    settings = Settings.model_validate({**settings.model_dump(), **json.loads(job["config_json"])})
+    settings = settings.restore_recognition_config(json.loads(job["config_json"]))
     stopped = threading.Event()
 
     def on_signal(_signum, _frame):

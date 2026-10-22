@@ -76,15 +76,20 @@ def atomic_json(path: Path, value: dict) -> None:
 
 
 def process_page(
-    engine, source: Path, number: int, directory: Path, settings: Settings
+    engine,
+    source: Path,
+    number: int,
+    directory: Path,
+    settings: Settings,
+    *,
+    backend: str | None = None,
 ) -> PageResult:
     started = time.monotonic()
     passes = []
     selected = None
     selected_image = None
-    dpis = [settings.dpi]
-    if settings.retry_dpi > settings.dpi:
-        dpis.append(settings.retry_dpi)
+    backend = backend or getattr(engine, "backend", settings.worker_backend)
+    dpis = settings.render_dpis(backend)
     for dpi in dpis:
         try:
             image = render_page(source, number, dpi, settings.max_page_pixels)
@@ -161,7 +166,7 @@ def process_job(
     directory = document_path(settings, job_id)
     source = directory / "source.pdf"
     # Submitted render/quality settings remain stable across worker restarts.
-    settings = settings.model_copy(update=json.loads(job["config_json"]))
+    settings = settings.restore_recognition_config(json.loads(job["config_json"]))
     metadata = dict(engine.metadata)
     metadata["settings"] = settings.recognition_config()
     db.set_engine(job_id, metadata)
@@ -174,7 +179,9 @@ def process_job(
         attempts = db.start_page(job_id, page.number)
         started = time.monotonic()
         try:
-            result = process_page(engine, source, page.number, directory, settings)
+            result = process_page(
+                engine, source, page.number, directory, settings, backend=job["backend"]
+            )
             result.attempts = attempts
             result.image_url = f"/api/documents/{job_id}/pages/{page.number}/image"
         except Exception as error:

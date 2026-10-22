@@ -142,7 +142,7 @@ class VLMEngine:
             "seed": 42,
             "cpu_threads": settings.cpu_threads,
             "context": context_size(settings, backend),
-            "max_input_pixels": settings.vlm_max_pixels,
+            "max_input_pixels": settings.vlm_image_budget(backend),
             "cache_type_k": settings.kv_cache_type,
             "cache_type_v": "f16",
             "task": settings.glm_task if backend == "glm_ocr" else "layout",
@@ -274,7 +274,7 @@ class VLMEngine:
         if self.log.closed:
             raise InferenceProcessError("Движок OCR закрыт")
         self._ensure_server()
-        png, preprocessing = encode_image(image, self.settings.vlm_max_pixels)
+        png, preprocessing = encode_image(image, self.settings.vlm_image_budget(self.backend))
         if preprocessing["resized"]:
             LOGGER.info("VLM image resized: %s", preprocessing)
         payload = {

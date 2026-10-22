@@ -80,7 +80,7 @@ backend обрабатывает другой PDF. Для оставшегося
 | `dots_mocr` | [dots-studio/dots.mocr](https://huggingface.co/dots-studio/dots.mocr) | [GGUF lodrick-the-lafted](https://huggingface.co/lodrick-the-lafted/dots.mocr-gguf), Q5_K_M, Q8_0 или BF16; mmproj Q8_0 |
 | `glm_ocr` | [zai-org/GLM-OCR](https://huggingface.co/zai-org/GLM-OCR) | [GGUF ggml-org](https://huggingface.co/ggml-org/GLM-OCR-GGUF), decoder и mmproj Q8_0 |
 | `chandra` | [datalab-to/chandra-ocr-2](https://huggingface.co/datalab-to/chandra-ocr-2) | [GGUF prithivMLmods](https://huggingface.co/prithivMLmods/chandra-ocr-2-GGUF), Q5_K_M + mmproj Q8_0 |
-| `lighton` | [lightonai/LightOnOCR-3-1B](https://huggingface.co/lightonai/LightOnOCR-3-1B) | [GGUF prithivMLmods](https://huggingface.co/prithivMLmods/LightOnOCR-3-1B-GGUF), decoder Q8_0/Q5_K_M и mmproj Q8_0 |
+| `lighton` | [lightonai/LightOnOCR-3-1B](https://huggingface.co/lightonai/LightOnOCR-3-1B) | [GGUF prithivMLmods](https://huggingface.co/prithivMLmods/LightOnOCR-3-1B-GGUF), decoder и mmproj Q8_0 |
 | `kdl` | [KDLAI/KDL-Frontier-Parser-nano](https://huggingface.co/KDLAI/KDL-Frontier-Parser-nano) | Исходные safetensors, Transformers 5.5.0 + PyTorch 2.7.1+cpu, FP32 |
 
 GGUF decoder без соответствующего vision encoder/projector не распознаёт картинки.
@@ -256,17 +256,13 @@ dots/GLM — MIT; LightOnOCR-3 — Apache-2.0; KDL — AGPL-3.0 по карто�
 
 | Backend / профиль | Модель | Веса / образ |
 | --- | --- | --- |
-| `lighton_small` | [lightonai/LightOnOCR-3-0.8B](https://huggingface.co/lightonai/LightOnOCR-3-0.8B) | [GGUF prithivMLmods](https://huggingface.co/prithivMLmods/LightOnOCR-3-0.8B-GGUF), decoder Q8_0/Q5_K_M и свой mmproj Q8_0; образ `vlm` |
+| `lighton_small` | [lightonai/LightOnOCR-3-0.8B](https://huggingface.co/lightonai/LightOnOCR-3-0.8B) | [GGUF prithivMLmods](https://huggingface.co/prithivMLmods/LightOnOCR-3-0.8B-GGUF), decoder и свой mmproj Q8_0; образ `vlm` |
 | `jina` | [jinaai/jina-ocr-v1](https://huggingface.co/jinaai/jina-ocr-v1) | [GGUF ahmadw](https://huggingface.co/ahmadw/jina-ocr-v1-GGUF), Q8_0 + mmproj F16; отдельный образ `jina` |
 | `surya` | [datalab-to/surya-ocr-2](https://huggingface.co/datalab-to/surya-ocr-2) | [Официальный GGUF](https://huggingface.co/datalab-to/surya-ocr-2-gguf), decoder и mmproj F16; образ `vlm` |
 | `falcon` | [tiiuae/Falcon-OCR](https://huggingface.co/tiiuae/Falcon-OCR), v1.5 | Исходные safetensors, FP32; отдельный образ `falcon` |
 | `nemotron` | [nvidia/Nemotron-3.5-Parse](https://huggingface.co/nvidia/Nemotron-3.5-Parse) | Исходные safetensors, FP32; отдельный образ `nemotron` |
 
 ### LightOnOCR-3-0.8B
-
-Decoder обеих моделей LightOn можно переключать между Q8_0 и Q5_K_M.
-Потоки генерации и обработки входных токенов задаются отдельно:
-[настройка LightOn на CPU](lighton-cpu.md).
 
 Самостоятельный checkpoint на базе Qwen3.5. Он не использует decoder или projector
 версии 1B. Маршрут: render → llama.cpp → `grounding` → Markdown/HTML и нормализованные

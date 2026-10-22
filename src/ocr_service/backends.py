@@ -10,12 +10,8 @@ def configuration_details(backend: str, config: dict) -> dict:
         "label": LABELS.get(backend, backend),
         "quantization": config.get("dots_quantization", "Q5_K_M")
         if backend == "dots_mocr"
-        else config.get("lighton_quantization", "Q8_0")
-        if backend == "lighton"
-        else config.get("lighton_small_quantization", "Q8_0")
-        if backend == "lighton_small"
         else "Q8_0"
-        if backend in {"glm_ocr", "jina"}
+        if backend in {"glm_ocr", "lighton", "lighton_small", "jina"}
         else "Q5_K_M"
         if backend == "chandra"
         else "FP32"

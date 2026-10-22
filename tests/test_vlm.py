@@ -98,9 +98,7 @@ def test_local_multimodal_http_contract_and_cpu_server_lifecycle(settings, monke
     with socket.socket() as probe:
         probe.bind(("127.0.0.1", 0))
         port = probe.getsockname()[1]
-    settings = settings.model_copy(
-        update={"llama_port": port, "cpu_threads": 8, "cpu_threads_batch": 16}
-    )
+    settings = settings.model_copy(update={"llama_port": port})
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *_args):
@@ -162,10 +160,6 @@ def test_local_multimodal_http_contract_and_cpu_server_lifecycle(settings, monke
         assert recorded["request"]["chat_template_kwargs"]["enable_thinking"] is False
         assert "--skip-chat-parsing" in recorded["command"]
         command = recorded["command"]
-        assert command[command.index("--threads") + 1] == "8"
-        assert command[command.index("--threads-batch") + 1] == "16"
-        assert engine.metadata["cpu_threads"] == 8
-        assert engine.metadata["cpu_threads_batch"] == 16
         expected_flash_attention = (
             "auto" if backend in {"dots_mocr", "surya", "lighton", "lighton_small"} else "off"
         )

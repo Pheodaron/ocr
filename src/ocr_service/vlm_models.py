@@ -25,13 +25,10 @@ def artifacts(backend: str, settings: Settings) -> dict:
         "lighton_small": (
             "prithivMLmods/LightOnOCR-3-0.8B-GGUF",
             "414757bdb78fd07c947a1e83c2b8d7e9a8b73583",
-            settings.lighton_small_quantization,
-            f"LightOnOCR-3-0.8B.{settings.lighton_small_quantization}.gguf",
+            "Q8_0",
+            "LightOnOCR-3-0.8B.Q8_0.gguf",
             "LightOnOCR-3-0.8B.mmproj-q8_0.gguf",
-            {
-                "Q8_0": "660a8931ba33c8a604076f69b8785b36eadcdb1cc90004e9f89bf67615a0456d",
-                "Q5_K_M": "fc87991ce656f03c23f45662c92a58048bd0620798ffd65471707a07e12c14ad",
-            }[settings.lighton_small_quantization],
+            "660a8931ba33c8a604076f69b8785b36eadcdb1cc90004e9f89bf67615a0456d",
             "a8b9b3b01b6c780747b48e0807ef5b753c54f27aa4c23962c3c7d5ace2ed0233",
         ),
         "jina": (
@@ -79,14 +76,11 @@ def artifacts(backend: str, settings: Settings) -> dict:
             repo, revision, quant, name = (
                 "prithivMLmods/LightOnOCR-3-1B-GGUF",
                 "ff5c331ec2cfee9de1c8054c21ccf88b8c5b0faa",
-                settings.lighton_quantization,
+                "Q8_0",
                 "LightOnOCR-3-1B",
             )
             hashes = (
-                {
-                    "Q8_0": "2cf9771aaf236a1c25f389a344510c9ad4daa863e5fdd82651cf7d7834fede1c",
-                    "Q5_K_M": "6c9ca18e0531f9f5277e3cd982b84ba83e5f476d2ee239a2288f82413f2ce355",
-                }[settings.lighton_quantization],
+                "2cf9771aaf236a1c25f389a344510c9ad4daa863e5fdd82651cf7d7834fede1c",
                 "7bbf40e6f3e91626843fdcbba67c7fe774821f3f0c537dcc8c769026a528839a",
             )
         model, projector = f"{name}.{quant}.gguf", f"{name}.mmproj-q8_0.gguf"

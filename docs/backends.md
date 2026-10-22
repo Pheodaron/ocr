@@ -91,6 +91,11 @@ PDF → BGR render → PNG → собственный vision encoder + decoder �
 Если JSON обрезан/невалиден, исходный текст сохраняется с предупреждением, без
 выдумывания структуры таблиц. Сгенерированные bbox остаются в raw: их система
 координат зависит от внутреннего resize llama.cpp, поэтому `block.bbox=null`.
+Для Q5_K_M и BF16 закреплён commit
+[`8bc6c189780084cf59b10d55fadcbe7d1292696a`](https://huggingface.co/lodrick-the-lafted/dots.mocr-gguf/tree/8bc6c189780084cf59b10d55fadcbe7d1292696a),
+где опубликованы эти файлы. Исходный `fc5b04f...` содержит только Q8 decoder
+и Q8 projector; он сохранён для Q8 ради совместимости существующих manifest.
+SHA256 Q5 decoder сверена с [LFS pointer в коммите загрузки](https://huggingface.co/lodrick-the-lafted/dots.mocr-gguf/commit/8bc6c189780084cf59b10d55fadcbe7d1292696a).
 Ориентация отдельно не классифицируется. Для повёрнутых сканов качество проверяется
 на том же тестовом наборе, что и у других VLM.
 

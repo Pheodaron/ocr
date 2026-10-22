@@ -13,7 +13,9 @@ from .models import ModelsUnavailable, sha256_file
 
 LOGGER = logging.getLogger(__name__)
 DOTS_REPO = "lodrick-the-lafted/dots.mocr-gguf"
-DOTS_REVISION = "fc5b04fbc134d7ee74dfd65b46193f7056db3e1b"
+# Q5_K_M and BF16 were added after the original Q8-only upload.
+DOTS_REVISION = "8bc6c189780084cf59b10d55fadcbe7d1292696a"
+DOTS_Q8_REVISION = "fc5b04fbc134d7ee74dfd65b46193f7056db3e1b"
 GLM_REPO = "ggml-org/GLM-OCR-GGUF"
 GLM_REVISION = "65a42de1148dbed2297e922b5dbc7d9b70c36578"
 
@@ -106,7 +108,7 @@ def artifacts(backend: str, settings: Settings) -> dict:
         }[quant]
         return {
             "repo": DOTS_REPO,
-            "revision": DOTS_REVISION,
+            "revision": DOTS_Q8_REVISION if quant == "Q8_0" else DOTS_REVISION,
             "quantization": quant,
             "model": filename,
             "projector": "mmproj-dotsmocr-q8_0.gguf",
@@ -167,8 +169,15 @@ def prepare_vlm(
                     raise ModelsUnavailable(f"Нет {target}. Выполните prepare-models --download")
                 _verify_file(temporary, pinned_hash)
                 os.replace(temporary, target)
+            except urllib.error.HTTPError as error:
+                hint = "Файл отсутствует в выбранной ревизии модели. " if error.code == 404 else ""
+                raise ModelsUnavailable(
+                    f"Не удалось подготовить {filename}: HTTP {error.code}. {hint}URL: {url}"
+                ) from error
             except (OSError, urllib.error.URLError) as error:
-                raise ModelsUnavailable(f"Не удалось подготовить {filename}: {error}") from error
+                raise ModelsUnavailable(
+                    f"Не удалось подготовить {filename} ({url}): {error}"
+                ) from error
             finally:
                 temporary.unlink(missing_ok=True)
         records[filename] = _verify_file(target, pinned_hash)

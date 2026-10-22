@@ -400,6 +400,7 @@ OCR_ALLOW_MODEL_DOWNLOAD=false podman compose --profile nemotron up -d --no-buil
 | `Permission denied` на томе | Не смешаны ли `podman` и `sudo podman`, корректно ли импортированы владельцы файлов; не делайте `chmod 777` |
 | `Illegal instruction` | Архитектура x86_64 и наличие AVX2 у CPU/виртуальной машины |
 | Процесс убит / exit 137 | Лимит RAM контейнера/хоста и OOM-события; остановите лишние модели, уменьшите контекст |
+| `download model from bos` при загрузке Paddle | Обновите код и пересоберите `paddle`: исправлен безусловный запуск выключенного PP-Chart2Table в PaddleX 3.3.13; после обновления загрузите PDF заново |
 | Ошибка SHA256 | Файл повреждён или не соответствует pinned revision; подготовьте правильные веса в отдельном наборе, не редактируйте manifest вручную |
 | `llama-server` не успел стартовать | Лог worker и `/data/logs/llama-<backend>.log`; RAM и `OCR_VLM_STARTUP_SECONDS` |
 | Обрыв ответа / `finish_reason=length` | Бюджет `OCR_VLM_MAX_TOKENS`, контекст и сложность страницы; результат помечен предупреждением |

@@ -7,6 +7,7 @@ import yaml
 
 from .config import Settings
 from .models import MODEL_ROLES, configure_offline_environment, verify_models
+from .paddle_runtime import local_model_factories
 
 
 def pipeline_config(settings: Settings) -> dict:
@@ -71,12 +72,14 @@ class PaddleEngine:
         configure_offline_environment(settings.cpu_threads, settings.data_dir / "cache")
         from paddleocr import PPStructureV3
 
-        self.pipeline = PPStructureV3(
-            paddlex_config=pipeline_config(settings),
-            device="cpu",
-            cpu_threads=settings.cpu_threads,
-            enable_mkldnn=True,
-        )
+        self.models_dir = settings.models_dir
+        with local_model_factories(self.models_dir):
+            self.pipeline = PPStructureV3(
+                paddlex_config=pipeline_config(settings),
+                device="cpu",
+                cpu_threads=settings.cpu_threads,
+                enable_mkldnn=True,
+            )
         self.metadata = {
             "name": "PP-StructureV3",
             "paddleocr": importlib.metadata.version("paddleocr"),
@@ -88,18 +91,19 @@ class PaddleEngine:
         }
 
     def recognize(self, image, *, layout_threshold: float | None = None) -> Prediction:
-        iterator = self.pipeline.predict_iter(
-            input=image,
-            layout_threshold=layout_threshold,
-            use_table_orientation_classify=False,
-            use_ocr_results_with_table_cells=True,
-            use_e2e_wired_table_rec_model=False,
-            use_e2e_wireless_table_rec_model=True,
-        )
-        try:
-            prediction = next(iterator)
-            raw = prediction.json
-            processed = prediction.get("doc_preprocessor_res", {}).get("output_img", image)
-            return Prediction(raw=raw, image=processed)
-        finally:
-            iterator.close()
+        with local_model_factories(self.models_dir):
+            iterator = self.pipeline.predict_iter(
+                input=image,
+                layout_threshold=layout_threshold,
+                use_table_orientation_classify=False,
+                use_ocr_results_with_table_cells=True,
+                use_e2e_wired_table_rec_model=False,
+                use_e2e_wireless_table_rec_model=True,
+            )
+            try:
+                prediction = next(iterator)
+                raw = prediction.json
+                processed = prediction.get("doc_preprocessor_res", {}).get("output_img", image)
+                return Prediction(raw=raw, image=processed)
+            finally:
+                iterator.close()

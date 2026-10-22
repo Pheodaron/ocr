@@ -3,6 +3,9 @@
 Локальный Linux-сервис: загрузка PDF → асинхронное распознавание текста и таблиц →
 JSON, Markdown и HTML. Русский и английский. Веб-клиент включён в приложение.
 
+**[Пошаговый гайд по развёртыванию](docs/deployment.md)**: Linux/Podman/mise,
+11 моделей, переключение сервисов, API, резервные копии и перенос без интернета.
+
 ## Запуск через Podman Compose
 
 Требуются Linux x86_64, CPU с AVX2, Podman и Compose provider (`podman-compose`
@@ -71,7 +74,8 @@ podman compose down
 ## Что запускается
 
 - `api`: FastAPI/Uvicorn на localhost; веб-страница без CDN и без весов.
-- `paddle`, `dots-mocr`, `glm-ocr`, `chandra`, `lighton`, `kdl`: независимые
+- `paddle`, `dots-mocr`, `glm-ocr`, `chandra`, `lighton`, `kdl`, `lighton-small`,
+  `jina`, `surya`, `falcon`, `nemotron`: независимые
   OCR-сервисы в своих профилях. У каждого `network_mode: none`, свой heartbeat,
   свой backend-фильтр очереди и один распознаваемый документ одновременно.
 - `models-*`: одноразовая подготовка весов соответствующего сервиса.
@@ -199,40 +203,15 @@ layout, OCR и восстановление таблиц. Формулы, диа
 
 ## Работа без интернета
 
-На машине с интернетом соберите нужные образы и подготовьте веса. Например GLM:
-
-```sh
-podman compose --profile glm_ocr build
-podman compose run --rm models-glm-ocr
-podman save --format oci-archive -o document-ocr.image.tar \
-  localhost/document-ocr-api:0.1.0 localhost/document-ocr-vlm:0.1.0
-# Экспорт весов из именованного тома в переносимый каталог:
-mkdir -p models
-podman compose run --rm --no-deps -v "$PWD/models:/export:z" models-glm-ocr \
-  python -c "import shutil; shutil.copytree('/models', '/export', dirs_exist_ok=True)"
-```
-
-Перенесите образы, проект и весь каталог `models/`, включая manifest-файлы.
-Для других профилей дополнительно перенесите соответствующие образы и подкаталоги весов.
-На изолированной машине:
-
-```sh
-podman load -i document-ocr.image.tar
-podman compose run --rm --no-deps -v "$PWD/models:/import:ro,z" models-glm-ocr \
-  ocr-service prepare-models --import-from /import
-OCR_ALLOW_MODEL_DOWNLOAD=false podman compose --profile glm_ocr up -d --no-build
-```
-
-Сборка тоже выполняется заранее: `--no-build` не пытается установить зависимости.
-Runtime-сервисы не имеют внешней сети и получают модели только для чтения. Если веса отсутствуют
-или SHA256 изменился, подготовка завершается явной ошибкой; ошибка загрузки в
-worker сохраняется в задании и не блокирует следующие задания; подмена OCR
-фиктивным результатом не предусмотрена.
+Подготовка образов и весов, экспорт/импорт тома с manifest и запуск без сборки
+описаны в [гайде по изолированному развёртыванию](docs/deployment.md#8-перенести-на-машину-без-интернета).
+Runtime-сервисы не имеют внешней сети и получают модели только для чтения.
 
 Для основных GGUF закреплены revision и SHA256 из карточек артефактов.
-Для Paddle/KDL/Falcon/Nemotron и dots BF16 SHA256 записывается после подготовки и проверяется
-перед загрузкой; это контроль последующих изменений. Manifest входит в результат.
-Для обновления моделей сначала сохраните старый набор и подготовьте новый отдельно.
+Для Paddle/KDL/Falcon/Nemotron и dots BF16 SHA256 записывается после подготовки
+и проверяется перед загрузкой; это контроль последующих изменений.
+Manifest входит в результат. Для обновления моделей сначала сохраните старый
+набор и подготовьте новый отдельно.
 
 ## Локальная разработка с mise
 

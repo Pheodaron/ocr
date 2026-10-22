@@ -28,6 +28,7 @@ class Settings(BaseSettings):
     dots_context: int = Field(32768, ge=2048, le=131072)
     glm_context: int = Field(16384, ge=2048, le=131072)
     glm_task: str = "text"
+    vlm_max_pixels: int = Field(1_500_000, ge=65_536, le=30_000_000)
     vlm_max_tokens: int = Field(8192, ge=128, le=65536)
     vlm_timeout_seconds: int = Field(3600, ge=10)
     vlm_startup_seconds: int = Field(300, ge=10)
@@ -82,6 +83,7 @@ class Settings(BaseSettings):
                 "glm_context",
                 "glm_task",
                 "vlm_max_tokens",
+                "vlm_max_pixels",
                 "kv_cache_type",
                 "vlm_timeout_seconds",
                 "vlm_context",

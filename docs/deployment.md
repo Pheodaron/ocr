@@ -69,6 +69,7 @@ OCR_RETRY_DPI=350
 OCR_ALLOW_MODEL_DOWNLOAD=true
 OCR_GLM_CONTEXT=16384
 OCR_VLM_MAX_TOKENS=8192
+OCR_VLM_MAX_PIXELS=1500000
 ```
 
 `OCR_CPU_THREADS` выбирайте с учётом ресурсов хоста. Для GLM не начинайте
@@ -254,6 +255,7 @@ podman compose --profile glm_ocr up -d
 | --- | --- |
 | `OCR_DOTS_QUANTIZATION` | `Q5_K_M`, `Q8_0` или `BF16`; требуется подготовка выбранных весов |
 | `OCR_GLM_TASK` | `text` для страницы или `table` для табличного запроса |
+| `OCR_VLM_MAX_PIXELS` | Максимальная площадь изображения для llama.cpp, по умолчанию 1 500 000; preview сохраняет исходный DPI. Уменьшение снижает RAM, но может ухудшать мелкий текст |
 | `OCR_VLM_MAX_TOKENS` | Бюджет ответа; при обрыве увеличьте с учётом контекста и RAM |
 | `OCR_VLM_STARTUP_SECONDS` | Ожидание загрузки llama-server, по умолчанию 300 секунд |
 | `OCR_VLM_TIMEOUT_SECONDS` | Таймаут запроса генерации, по умолчанию 3600 секунд |
@@ -403,7 +405,8 @@ OCR_ALLOW_MODEL_DOWNLOAD=false podman compose --profile nemotron up -d --no-buil
 | `service_completed_successfully` не поддерживается | Обновите Compose provider; worker должен ждать успешной подготовки весов |
 | `Permission denied` на томе | Не смешаны ли `podman` и `sudo podman`, корректно ли импортированы владельцы файлов; не делайте `chmod 777` |
 | `Illegal instruction` | Архитектура x86_64 и наличие AVX2 у CPU/виртуальной машины |
-| Процесс убит / exit 137 | Лимит RAM контейнера/хоста и OOM-события; остановите лишние модели, уменьшите контекст |
+| Процесс убит / exit 137 | Проверьте RAM и cgroup memory.events; exit 137 контейнера не следует путать с кодом -9 дочернего llama-server. SIGKILL сам по себе ещё не подтверждает OOM |
+| `llama-server завершился` | В pages[].error есть код/сигнал и путь к журналу; проблемная страница не повторяется на повышенном DPI, перед следующей сервер перезапускается |
 | `download model from bos` при загрузке Paddle | Обновите код и пересоберите `paddle`: исправлен безусловный запуск выключенного PP-Chart2Table в PaddleX 3.3.13; после обновления загрузите PDF заново |
 | `Failed to fetch pypi.org` / `tls handshake eof` при сборке | Сбой TLS/сети при скачивании пакета: проверьте доступ к PyPI, прокси и доверенные CA; пересборка приложения больше не скачивает Hatchling, но зависимости всё ещё требуют сеть |
 | HTTP 404 при загрузке dots Q5_K_M / BF16 | Обновите код и пересоберите профиль `dots_mocr`, включая API-образ загрузчика и VLM-образ worker: исправлен revision, не содержавший эти файлы |
@@ -422,6 +425,43 @@ OCR_ALLOW_MODEL_DOWNLOAD=false podman compose --profile nemotron up -d --no-buil
 podman ps -a
 podman compose --profile nemotron logs --tail=100 models-nemotron nemotron api
 ```
+
+Если dots.mocr убит OOM-killer, начните новый прогон с ограничением входа
+и меньшим контекстом. В `.env`:
+
+```dotenv
+OCR_VLM_MAX_PIXELS=1500000
+OCR_DOTS_CONTEXT=16384
+```
+
+Обновите оба образа (API сохраняет настройки задания, worker их использует),
+пересоздайте сервисы и загрузите PDF заново:
+
+```sh
+podman compose --profile dots_mocr up --build --force-recreate -d
+```
+
+При необходимости уменьшайте `OCR_VLM_MAX_PIXELS` дальше, оценивая читаемость
+мелкого текста. Не рассчитывайте RAM только по размеру GGUF: vision encoder,
+attention и KV-cache требуют дополнительной памяти. Ранее завершённые ошибкой
+задания автоматически не переобрабатываются.
+
+Для dots.mocr журнал сервера и лимиты памяти можно получить так:
+
+```sh
+podman compose --profile dots_mocr exec dots-mocr tail -n 120 /data/logs/llama-dots_mocr.log
+podman compose --profile dots_mocr exec dots-mocr sh -c 'cat /sys/fs/cgroup/memory.max; cat /sys/fs/cgroup/memory.events'
+free -h
+```
+
+У `exec` тоже указывайте профиль: некоторые версии podman-compose иначе
+не видят сервис. На cgroup v2 `memory.max=max` означает отсутствие собственного
+жёсткого лимита на этом уровне; лимит предков/хоста всё ещё возможен.
+Рост `oom_kill` в `memory.events` подтверждает OOM-убийства в этой cgroup,
+но счётчик накопительный за время её существования. Если этих файлов нет,
+проверьте cgroup/системный журнал хоста. Свободная RAM после сбоя не показывает
+пик памяти непосредственно перед ним. Предупреждения об отсутствии GPU
+ожидаемы для CPU-сборки.
 
 После исправления ошибки инициализации перезапустите нужный сервис и загрузите
 PDF повторно: уже завершённое `failed`-задание автоматически не переотправляется.

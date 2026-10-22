@@ -10,6 +10,10 @@ from .models import MODEL_ROLES, configure_offline_environment, verify_models
 from .paddle_runtime import local_model_factories
 
 
+class InferenceProcessError(RuntimeError):
+    """The inference process/request failed; increasing page DPI cannot recover it."""
+
+
 def pipeline_config(settings: Settings) -> dict:
     config = yaml.safe_load(Path(__file__).with_name("paddle_pipeline.yaml").read_text())
     config.update(

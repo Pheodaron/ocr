@@ -27,6 +27,14 @@ def adapt_vlm(raw: dict, number: int, dpi: int, width: int, height: int) -> Page
     warnings = ["Генеративный OCR: оценка confidence отсутствует; проверьте текст и числа"]
     if choice.get("finish_reason") != "stop":
         warnings.append(f"Генерация не завершена штатно: {choice.get('finish_reason')}")
+    preprocessing = raw.get("image_preprocessing", {})
+    if preprocessing.get("resized"):
+        warnings.append(
+            "Вход VLM уменьшен с "
+            f"{preprocessing['render_width']}×{preprocessing['render_height']} до "
+            f"{preprocessing['input_width']}×{preprocessing['input_height']} пикселей "
+            "для ограничения памяти; проверьте мелкий текст."
+        )
     blocks = []
     if raw["ocr_backend"] == "dots_mocr":
         try:

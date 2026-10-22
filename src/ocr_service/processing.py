@@ -10,6 +10,7 @@ import pymupdf
 from .adapter import adapt_prediction
 from .config import Settings
 from .db import Database
+from .engine import InferenceProcessError
 from .schemas import PageResult
 
 LOGGER = logging.getLogger(__name__)
@@ -140,6 +141,10 @@ def process_page(
             if selected is not None:
                 selected.needs_review = True
                 selected.warnings.append(f"Повторный проход {dpi} dpi завершился ошибкой")
+            if isinstance(error, InferenceProcessError):
+                # A failed server must be restarted for the next page, not called
+                # again with an even larger image in the current page's DPI retry.
+                break
     if selected is None:
         raise RuntimeError("; ".join(item["error"] or "" for item in passes))
     selected.passes = passes

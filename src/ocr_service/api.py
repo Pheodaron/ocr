@@ -1,0 +1,200 @@
+import hashlib
+import json
+import shutil
+from contextlib import asynccontextmanager
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import Annotated, Literal
+from uuid import uuid4
+
+from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import Path as PathParam
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
+from fastapi.staticfiles import StaticFiles
+from starlette.concurrency import run_in_threadpool
+
+from .config import Settings
+from .db import Database
+from .exports import html_document, markdown_document
+from .processing import document_path, validate_pdf
+from .schemas import TERMINAL_STATUSES, DocumentResult, JobSummary, WorkerStatus
+
+JobId = Annotated[str, PathParam(pattern=r"^[0-9a-f]{32}$")]
+
+
+def worker_status(db: Database, settings: Settings) -> WorkerStatus:
+    record = db.worker()
+    if record is None:
+        return WorkerStatus()
+    status = WorkerStatus.model_validate(record)
+    age = (datetime.now(UTC) - datetime.fromisoformat(status.heartbeat)).total_seconds()
+    status.ready = status.state in {"idle", "processing"} and age < settings.worker_stale_seconds
+    if age >= settings.worker_stale_seconds and status.state != "error":
+        status.state = "offline"
+    return status
+
+
+def create_app(settings: Settings | None = None) -> FastAPI:
+    settings = settings or Settings()
+    db = Database(settings.db_path)
+
+    @asynccontextmanager
+    async def lifespan(_app):
+        settings.setup()
+        db.initialize()
+        yield
+
+    app = FastAPI(
+        title="Document OCR",
+        version="0.1.0",
+        lifespan=lifespan,
+        docs_url=None,
+        redoc_url=None,
+        description="Локальный CPU OCR: PDF → текст, таблицы, JSON, Markdown и HTML.",
+    )
+    app.state.db = db
+    app.state.settings = settings
+
+    @app.middleware("http")
+    async def headers_and_limit(request, call_next):
+        content_length = request.headers.get("content-length")
+        if content_length:
+            try:
+                oversized = int(content_length) > settings.max_upload_mb * 1024**2 + 1024**2
+            except ValueError:
+                return JSONResponse({"detail": "Некорректный Content-Length"}, status_code=400)
+            if oversized:
+                return JSONResponse({"detail": "Превышен лимит загрузки PDF"}, status_code=413)
+        response = await call_next(request)
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["Referrer-Policy"] = "no-referrer"
+        response.headers["Content-Security-Policy"] = (
+            "default-src 'self'; script-src 'self'; style-src 'self'; "
+            "img-src 'self'; connect-src 'self'; frame-ancestors 'none'; object-src 'none'"
+        )
+        return response
+
+    def require_job(job_id: str) -> dict:
+        job = db.get_job(job_id)
+        if job is None:
+            raise HTTPException(404, "Документ не найден")
+        return job
+
+    def result_for(job_id: str) -> DocumentResult:
+        job = require_job(job_id)
+        if job["status"] not in TERMINAL_STATUSES:
+            raise HTTPException(409, "Обработка ещё не завершена", headers={"Retry-After": "2"})
+        return DocumentResult(
+            document=db.summary(job_id),
+            engine=json.loads(job["engine_json"]),
+            pages=db.pages(job_id),
+        )
+
+    @app.get("/health")
+    def health():
+        with db.connect() as connection:
+            connection.execute("SELECT 1")
+        return {"status": "ok", "worker": worker_status(db, settings)}
+
+    @app.get("/ready")
+    def ready():
+        status = worker_status(db, settings)
+        return JSONResponse(
+            {"ready": status.ready, "worker": status.model_dump()},
+            status_code=200 if status.ready else 503,
+        )
+
+    @app.get("/api/config")
+    def public_config():
+        return {"max_upload_mb": settings.max_upload_mb, "max_pages": settings.max_pages}
+
+    @app.post("/api/documents", response_model=JobSummary, status_code=202)
+    async def upload_document(file: Annotated[UploadFile, File(description="PDF документ")]):
+        job_id = uuid4().hex
+        directory = document_path(settings, job_id)
+        directory.mkdir(parents=True)
+        path = directory / "source.pdf"
+        digest = hashlib.sha256()
+        size = 0
+        try:
+            if file.size is not None and file.size > settings.max_upload_mb * 1024**2:
+                raise HTTPException(413, "Превышен лимит загрузки PDF")
+            with path.open("wb") as output:
+                while chunk := await file.read(1024 * 1024):
+                    size += len(chunk)
+                    if size > settings.max_upload_mb * 1024**2:
+                        raise HTTPException(413, "Превышен лимит загрузки PDF")
+                    digest.update(chunk)
+                    output.write(chunk)
+            if size == 0:
+                raise HTTPException(422, "Загружен пустой файл")
+            try:
+                pages = await run_in_threadpool(validate_pdf, path, settings.max_pages)
+            except ValueError as error:
+                raise HTTPException(422, str(error)) from error
+            filename = (file.filename or "document.pdf").replace("\\", "/").rsplit("/", 1)[-1]
+            filename = "".join(char for char in filename if char.isprintable())[:255]
+            db.create_job(
+                job_id,
+                filename or "document.pdf",
+                digest.hexdigest(),
+                pages,
+                settings.recognition_config(),
+            )
+        except BaseException:
+            shutil.rmtree(directory, ignore_errors=True)
+            raise
+        finally:
+            await file.close()
+        return db.summary(job_id)
+
+    @app.get("/api/documents", response_model=list[JobSummary])
+    def list_documents():
+        return db.recent()
+
+    @app.get("/api/documents/{job_id}", response_model=JobSummary)
+    def get_document(job_id: JobId):
+        require_job(job_id)
+        return db.summary(job_id)
+
+    @app.get("/api/documents/{job_id}/result", response_model=DocumentResult)
+    def get_result(job_id: JobId):
+        return result_for(job_id)
+
+    @app.get("/api/documents/{job_id}/download")
+    def download(job_id: JobId, format: Literal["json", "markdown", "html"] = "json"):
+        result = result_for(job_id)
+        if format == "markdown":
+            content, media, suffix = markdown_document(result), "text/markdown", "md"
+        elif format == "html":
+            content, media, suffix = html_document(result), "text/html", "html"
+        else:
+            content, media, suffix = result.model_dump_json(indent=2), "application/json", "json"
+        return Response(
+            content,
+            media_type=media,
+            headers={"Content-Disposition": f'attachment; filename="document-{job_id}.{suffix}"'},
+        )
+
+    @app.get("/api/documents/{job_id}/pages/{number}/image")
+    def page_image(job_id: JobId, number: Annotated[int, PathParam(ge=1)]):
+        job = require_job(job_id)
+        if number > job["page_count"]:
+            raise HTTPException(404, "Страница не найдена")
+        path = document_path(settings, job_id) / f"page-{number}.png"
+        if not path.is_file():
+            raise HTTPException(404, "Изображение страницы ещё не сохранено")
+        return FileResponse(path, media_type="image/png")
+
+    static = Path(__file__).with_name("static")
+    app.mount("/static", StaticFiles(directory=static), name="static")
+
+    @app.get("/", response_class=HTMLResponse, include_in_schema=False)
+    def index():
+        return HTMLResponse((static / "index.html").read_text())
+
+    @app.get("/docs", response_class=HTMLResponse, include_in_schema=False)
+    def api_docs():
+        return HTMLResponse((static / "api.html").read_text())
+
+    return app

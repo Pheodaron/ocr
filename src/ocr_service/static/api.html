@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="ru">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Document OCR API</title><link rel="stylesheet" href="/static/style.css"></head>
+<body><main><header><h1>Document OCR API</h1><a href="/">Открыть клиент</a></header>
+<section class="card"><p>Асинхронное распознавание PDF. <a href="/openapi.json">Автоматическая схема OpenAPI JSON</a>.</p>
+<div class="table-scroll"><table><thead><tr><th>Метод</th><th>Путь</th><th>Результат</th></tr></thead><tbody>
+<tr><td>POST</td><td>/api/documents</td><td>multipart/form-data, поле file. Ответ 202: ID и начальный статус.</td></tr>
+<tr><td>GET</td><td>/api/documents</td><td>Последние 30 заданий.</td></tr>
+<tr><td>GET</td><td>/api/documents/{id}</td><td>Статус и количество обработанных, успешных, ошибочных страниц.</td></tr>
+<tr><td>GET</td><td>/api/documents/{id}/result</td><td>JSON результата. Ответ 409, пока обработка не завершена.</td></tr>
+<tr><td>GET</td><td>/api/documents/{id}/download?format=json|markdown|html</td><td>Скачать результат файлом.</td></tr>
+<tr><td>GET</td><td>/api/documents/{id}/pages/{number}/image</td><td>PNG страницы с исправленной ориентацией. Нумерация с 1.</td></tr>
+<tr><td>GET</td><td>/health</td><td>Работоспособность API и сведения о worker.</td></tr>
+<tr><td>GET</td><td>/ready</td><td>200, если модели загружены и worker отвечает; иначе 503.</td></tr>
+</tbody></table></div>
+<p>Загрузка:</p><pre>curl -F 'file=@document.pdf' http://localhost:8000/api/documents</pre>
+<p>Получение результата:</p><pre>curl http://localhost:8000/api/documents/ID/result</pre>
+<p>Статусы: queued → processing → completed / partial / failed. partial означает, что часть страниц не обработана. needs_review — независимый признак необходимости проверки распознавания.</p>
+<p>Координаты: [x_min, y_min, x_max, y_max], в пикселях изображения страницы после исправления ориентации. OCR score не является вероятностью достоверности значения.</p>
+</section></main></body></html>

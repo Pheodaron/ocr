@@ -1,0 +1,35 @@
+[tools]
+python = "3.12"
+uv = "0.12.23"
+
+[tasks.install]
+description = "Установить зависимости, включая CPU OCR"
+run = "uv sync --frozen --extra ocr"
+
+[tasks.models]
+description = "Подготовить модели (требуется сеть при первом запуске)"
+run = "uv run --frozen ocr-service prepare-models --download"
+
+[tasks.api]
+description = "Запустить API и веб-клиент на localhost:8000"
+run = "uv run --frozen ocr-service api"
+
+[tasks.worker]
+description = "Запустить CPU OCR worker"
+run = "uv run --frozen --extra ocr ocr-service worker"
+
+[tasks.up]
+description = "Собрать и запустить приложение через Podman Compose"
+run = "podman compose up --build -d"
+
+[tasks.down]
+description = "Остановить приложение, сохранив данные и модели"
+run = "podman compose down"
+
+[tasks.test]
+description = "Проверить API, очередь, повторы и частичные результаты"
+run = "uv run --frozen pytest -m 'not ocr'"
+
+[tasks.check]
+description = "Статический анализ и форматирование"
+run = ["uv run --frozen ruff check .", "uv run --frozen ruff format --check ."]

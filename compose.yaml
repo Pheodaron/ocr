@@ -1,0 +1,74 @@
+name: document-ocr
+
+x-image: &image
+  image: localhost/document-ocr:0.1.0
+  build:
+    context: .
+    dockerfile: Containerfile
+
+x-environment: &environment
+  OCR_DATA_DIR: /data
+  OCR_MODELS_DIR: /models
+  OCR_CPU_THREADS: ${OCR_CPU_THREADS:-4}
+  OCR_DPI: ${OCR_DPI:-250}
+  OCR_RETRY_DPI: ${OCR_RETRY_DPI:-350}
+  OCR_REVIEW_THRESHOLD: ${OCR_REVIEW_THRESHOLD:-0.75}
+  OCR_LAYOUT_THRESHOLD: ${OCR_LAYOUT_THRESHOLD:-0.5}
+  OCR_MAX_UPLOAD_MB: ${OCR_MAX_UPLOAD_MB:-64}
+  OCR_MAX_PAGES: ${OCR_MAX_PAGES:-300}
+  OCR_MAX_PAGE_PIXELS: ${OCR_MAX_PAGE_PIXELS:-30000000}
+
+services:
+  models:
+    <<: *image
+    command: ["ocr-service", "prepare-models"]
+    environment:
+      OCR_MODELS_DIR: /models
+      # Only this preparation container may download weights on first launch.
+      OCR_ALLOW_MODEL_DOWNLOAD: ${OCR_ALLOW_MODEL_DOWNLOAD:-true}
+    volumes:
+      - models:/models
+    restart: "no"
+
+  api:
+    <<: *image
+    command: ["ocr-service", "api", "--host", "0.0.0.0", "--port", "8000"]
+    environment: *environment
+    ports:
+      - "127.0.0.1:${OCR_PORT:-8000}:8000"
+    volumes:
+      - data:/data
+    networks: [runtime]
+    init: true
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+
+  worker:
+    <<: *image
+    command: ["ocr-service", "worker"]
+    environment: *environment
+    volumes:
+      - data:/data
+      - models:/models:ro
+    depends_on:
+      models:
+        condition: service_completed_successfully
+    network_mode: none
+    init: true
+    shm_size: "512mb"
+    stop_grace_period: 120s
+    restart: unless-stopped
+
+volumes:
+  data:
+  models:
+
+networks:
+  runtime:
+    # An internal-only bridge suppresses published ports in Docker/Podman.
+    # The API makes no outbound calls; the OCR worker has network_mode: none.
+    driver: bridge

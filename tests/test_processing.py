@@ -143,6 +143,7 @@ def test_legacy_queued_job_keeps_previous_render_and_image_budget(
     legacy_config = json.loads(job["config_json"])
     legacy_config.pop("vlm_dpi")
     legacy_config.pop("dots_max_pixels")
+    legacy_config["vlm_max_pixels"] = 1_500_000
     job["config_json"] = json.dumps(legacy_config)
     restored = settings.restore_recognition_config(legacy_config)
     assert restored.vlm_image_budget("dots_mocr") == 1_500_000

@@ -142,14 +142,14 @@ def test_local_multimodal_http_contract_and_cpu_server_lifecycle(settings, monke
     monkeypatch.setattr(vlm.subprocess, "Popen", Process)
     engine = VLMEngine(settings, backend)
     try:
-        prediction = engine.recognize(np.zeros((1500, 1200, 3), dtype=np.uint8))
+        prediction = engine.recognize(np.zeros((2400, 1800, 3), dtype=np.uint8))
         assert prediction.format == "vlm"
         content = recorded["request"]["messages"][0]["content"]
         assert content[1]["text"] == engine.prompt
         assert recorded["request"]["model"] == backend
         image_url = content[0]["image_url"]["url"]
         decoded = pymupdf.Pixmap(base64.b64decode(image_url.split(",")[1]))
-        expected_budget = 1_000_000 if backend == "dots_mocr" else 1_500_000
+        expected_budget = 2_500_000
         assert decoded.width * decoded.height <= expected_budget
         assert decoded.width * decoded.height >= expected_budget * 0.99
         assert engine.metadata["max_input_pixels"] == expected_budget
@@ -286,6 +286,25 @@ def test_vlm_image_budget_preserves_aspect_ratio_colors_and_original_preview():
     small = source[:20, :30]
     png, metadata = encode_image(small, 1_500_000)
     assert (pymupdf.Pixmap(png).width, pymupdf.Pixmap(png).height) == (30, 20)
+    assert not metadata["resized"]
+
+
+@pytest.mark.parametrize("backend", ["dots_mocr", "glm_ocr"])
+def test_standard_a4_keeps_full_150_dpi_resolution(settings, tmp_path, backend):
+    import pymupdf
+
+    from ocr_service.processing import render_page
+    from ocr_service.vlm import encode_image
+
+    source = tmp_path / "a4.pdf"
+    with pymupdf.open() as document:
+        page = document.new_page(width=210 / 25.4 * 72, height=297 / 25.4 * 72)
+        page.insert_text((40, 60), "Document with 11 pt text", fontsize=11)
+        document.save(source)
+    image = render_page(source, 1, settings.vlm_dpi, settings.max_page_pixels)
+    png, metadata = encode_image(image, settings.vlm_image_budget(backend))
+    decoded = pymupdf.Pixmap(png)
+    assert (decoded.width, decoded.height) == (1241, 1754)
     assert not metadata["resized"]
 
 

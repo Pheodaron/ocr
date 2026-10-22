@@ -497,6 +497,42 @@ podman compose --profile dots_mocr exec dots-mocr sh -c 'cat /sys/fs/cgroup/memo
 free -h
 ```
 
+Чтобы разделить обработку изображения и входных токенов декодера, включите
+расширенный журнал готовым override (пересборка образа не нужна):
+
+```sh
+podman compose -f compose.yaml -f compose.debug.yaml --profile dots_mocr up -d --force-recreate dots-mocr
+podman compose --profile dots_mocr exec dots-mocr tail -n 200 -f /data/logs/llama-dots_mocr.log
+```
+
+`compose.debug.yaml` передаёт `LLAMA_ARG_LOG_VERBOSITY=4` и
+`LLAMA_ARG_LOG_TIMESTAMPS=true` непосредственно в контейнер worker;
+llama-server наследует эти переменные. Одна запись переменных в `.env` без
+их передачи через Compose не включает диагностику. Уровень 4 показывает
+низкоуровневые INFO-сообщения библиотек llama.cpp, скрытые на уровне 3.
+
+| Сообщение в журнале | Этап |
+| --- | --- |
+| `flash attention is enabled` / `disabled` | Фактический режим визуального энкодера |
+| `encoding mtmd batch from idx` | Начало вычисления визуальных embeddings |
+| `decoding image batch 1/...` | Embeddings готовы; начинается подача визуальных токенов в декодер |
+| `image decoded (batch .../...) in ... ms` | Время одного пакета визуальных токенов |
+| `n_decoded`, `tg` | Генерация выходного текста и её скорость |
+
+Пауза между `encoding mtmd batch` и первым `decoding image batch` относится
+к визуальному энкодеру. Медленные пакеты `image decoded` указывают на
+обработку входного контекста декодером. Время подготовки входа и время
+генерации также доступны в `pages[].metrics.timings` после завершения страницы.
+Для чистого замера остановите прежнее задание кнопкой и загрузите одну страницу.
+Уровень 5 пишет значительно больше данных, включая содержимое запросов;
+для первичной диагностики достаточно 4.
+
+Вернуть обычный уровень журнала:
+
+```sh
+podman compose --profile dots_mocr up -d --force-recreate dots-mocr
+```
+
 У `exec` тоже указывайте профиль: некоторые версии podman-compose иначе
 не видят сервис. На cgroup v2 `memory.max=max` означает отсутствие собственного
 жёсткого лимита на этом уровне; лимит предков/хоста всё ещё возможен.

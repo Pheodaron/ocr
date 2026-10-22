@@ -1,0 +1,7 @@
+# Extra llama.cpp stage logs for dots.mocr; no image rebuild required.
+# podman compose -f compose.yaml -f compose.debug.yaml --profile dots_mocr up -d --force-recreate dots-mocr
+services:
+  dots-mocr:
+    environment:
+      LLAMA_ARG_LOG_VERBOSITY: "4"
+      LLAMA_ARG_LOG_TIMESTAMPS: "true"

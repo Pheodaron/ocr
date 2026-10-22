@@ -1,10 +1,27 @@
 name: document-ocr
 
-x-image: &image
-  image: localhost/document-ocr:0.1.0
-  build:
-    context: .
-    dockerfile: Containerfile
+x-api-image: &api-image
+  image: localhost/document-ocr-api:0.1.0
+  build: {context: ., dockerfile: Containerfile, target: api}
+x-vlm-image: &vlm-image
+  image: localhost/document-ocr-vlm:0.1.0
+  build: {context: ., dockerfile: Containerfile, target: vlm}
+x-paddle-image: &paddle-image
+  image: localhost/document-ocr-paddle:0.1.0
+  build: {context: ., dockerfile: Containerfile, target: paddle}
+x-kdl-image: &kdl-image
+  image: localhost/document-ocr-kdl:0.1.0
+  build: {context: ., dockerfile: Containerfile, target: kdl}
+
+x-jina-image: &jina-image
+  image: localhost/document-ocr-jina:0.1.0
+  build: {context: ., dockerfile: Containerfile, target: jina}
+x-falcon-image: &falcon-image
+  image: localhost/document-ocr-falcon:0.1.0
+  build: {context: ., dockerfile: Containerfile, target: falcon}
+x-nemotron-image: &nemotron-image
+  image: localhost/document-ocr-nemotron:0.1.0
+  build: {context: ., dockerfile: Containerfile, target: nemotron}
 
 x-environment: &environment
   OCR_DATA_DIR: /data
@@ -17,28 +34,40 @@ x-environment: &environment
   OCR_MAX_UPLOAD_MB: ${OCR_MAX_UPLOAD_MB:-64}
   OCR_MAX_PAGES: ${OCR_MAX_PAGES:-300}
   OCR_MAX_PAGE_PIXELS: ${OCR_MAX_PAGE_PIXELS:-30000000}
+  OCR_ENABLED_BACKENDS: ${OCR_ENABLED_BACKENDS:-paddle,dots_mocr,glm_ocr,chandra,lighton,kdl,lighton_small,jina,surya,falcon,nemotron}
+  OCR_DOTS_QUANTIZATION: ${OCR_DOTS_QUANTIZATION:-Q5_K_M}
+  OCR_DOTS_CONTEXT: ${OCR_DOTS_CONTEXT:-32768}
+  OCR_GLM_CONTEXT: ${OCR_GLM_CONTEXT:-16384}
+  OCR_GLM_TASK: ${OCR_GLM_TASK:-text}
+  OCR_VLM_CONTEXT: ${OCR_VLM_CONTEXT:-16384}
+  OCR_VLM_MAX_TOKENS: ${OCR_VLM_MAX_TOKENS:-8192}
+  OCR_KV_CACHE_TYPE: ${OCR_KV_CACHE_TYPE:-q8_0}
+  OCR_VLM_TIMEOUT_SECONDS: ${OCR_VLM_TIMEOUT_SECONDS:-3600}
+  OCR_VLM_STARTUP_SECONDS: ${OCR_VLM_STARTUP_SECONDS:-300}
+
+
+x-model-preparation: &model-preparation
+  <<: *api-image
+  command: ["ocr-service", "prepare-models"]
+  volumes: ["models:/models"]
+  restart: "no"
+
+x-worker: &worker
+  command: ["ocr-service", "worker"]
+  volumes: ["data:/data", "models:/models:ro"]
+  network_mode: none
+  init: true
+  shm_size: "512mb"
+  stop_grace_period: 120s
+  restart: unless-stopped
 
 services:
-  models:
-    <<: *image
-    command: ["ocr-service", "prepare-models"]
-    environment:
-      OCR_MODELS_DIR: /models
-      # Only this preparation container may download weights on first launch.
-      OCR_ALLOW_MODEL_DOWNLOAD: ${OCR_ALLOW_MODEL_DOWNLOAD:-true}
-    volumes:
-      - models:/models
-    restart: "no"
-
   api:
-    <<: *image
+    <<: *api-image
     command: ["ocr-service", "api", "--host", "0.0.0.0", "--port", "8000"]
     environment: *environment
-    ports:
-      - "127.0.0.1:${OCR_PORT:-8000}:8000"
-    volumes:
-      - data:/data
-    networks: [runtime]
+    ports: ["127.0.0.1:${OCR_PORT:-8000}:8000"]
+    volumes: ["data:/data"]
     init: true
     restart: unless-stopped
     healthcheck:
@@ -47,28 +76,204 @@ services:
       timeout: 5s
       retries: 3
 
-  worker:
-    <<: *image
-    command: ["ocr-service", "worker"]
-    environment: *environment
-    volumes:
-      - data:/data
-      - models:/models:ro
+  models-paddle:
+    <<: *model-preparation
+    profiles: [paddle]
+    environment:
+      <<: *environment
+      OCR_ENABLED_BACKENDS: paddle
+      OCR_ALLOW_MODEL_DOWNLOAD: ${OCR_ALLOW_MODEL_DOWNLOAD:-true}
+
+  paddle:
+    <<: [*worker, *paddle-image]
+    profiles: [paddle]
+    environment:
+      <<: *environment
+      OCR_WORKER_BACKEND: paddle
     depends_on:
-      models:
+      models-paddle:
         condition: service_completed_successfully
-    network_mode: none
-    init: true
-    shm_size: "512mb"
-    stop_grace_period: 120s
-    restart: unless-stopped
+
+  models-dots-mocr:
+    <<: *model-preparation
+    profiles: [dots_mocr]
+    environment:
+      <<: *environment
+      OCR_ENABLED_BACKENDS: dots_mocr
+      OCR_ALLOW_MODEL_DOWNLOAD: ${OCR_ALLOW_MODEL_DOWNLOAD:-true}
+
+  dots-mocr:
+    <<: [*worker, *vlm-image]
+    profiles: [dots_mocr]
+    environment:
+      <<: *environment
+      OCR_WORKER_BACKEND: dots_mocr
+    depends_on:
+      models-dots-mocr:
+        condition: service_completed_successfully
+
+  models-glm-ocr:
+    <<: *model-preparation
+    profiles: [glm_ocr]
+    environment:
+      <<: *environment
+      OCR_ENABLED_BACKENDS: glm_ocr
+      OCR_ALLOW_MODEL_DOWNLOAD: ${OCR_ALLOW_MODEL_DOWNLOAD:-true}
+
+  glm-ocr:
+    <<: [*worker, *vlm-image]
+    profiles: [glm_ocr]
+    environment:
+      <<: *environment
+      OCR_WORKER_BACKEND: glm_ocr
+    depends_on:
+      models-glm-ocr:
+        condition: service_completed_successfully
+
+  models-chandra:
+    <<: *model-preparation
+    profiles: [chandra]
+    environment:
+      <<: *environment
+      OCR_ENABLED_BACKENDS: chandra
+      OCR_ALLOW_MODEL_DOWNLOAD: ${OCR_ALLOW_MODEL_DOWNLOAD:-true}
+
+  chandra:
+    <<: [*worker, *vlm-image]
+    profiles: [chandra]
+    environment:
+      <<: *environment
+      OCR_WORKER_BACKEND: chandra
+    depends_on:
+      models-chandra:
+        condition: service_completed_successfully
+
+  models-lighton:
+    <<: *model-preparation
+    profiles: [lighton]
+    environment:
+      <<: *environment
+      OCR_ENABLED_BACKENDS: lighton
+      OCR_ALLOW_MODEL_DOWNLOAD: ${OCR_ALLOW_MODEL_DOWNLOAD:-true}
+
+  lighton:
+    <<: [*worker, *vlm-image]
+    profiles: [lighton]
+    environment:
+      <<: *environment
+      OCR_WORKER_BACKEND: lighton
+    depends_on:
+      models-lighton:
+        condition: service_completed_successfully
+
+  models-kdl:
+    <<: *model-preparation
+    profiles: [kdl]
+    environment:
+      <<: *environment
+      OCR_ENABLED_BACKENDS: kdl
+      OCR_ALLOW_MODEL_DOWNLOAD: ${OCR_ALLOW_MODEL_DOWNLOAD:-true}
+
+  kdl:
+    <<: [*worker, *kdl-image]
+    profiles: [kdl]
+    environment:
+      <<: *environment
+      OCR_WORKER_BACKEND: kdl
+    depends_on:
+      models-kdl:
+        condition: service_completed_successfully
+
+  models-lighton-small:
+    <<: *model-preparation
+    profiles: [lighton_small]
+    environment:
+      <<: *environment
+      OCR_ENABLED_BACKENDS: lighton_small
+      OCR_ALLOW_MODEL_DOWNLOAD: ${OCR_ALLOW_MODEL_DOWNLOAD:-true}
+
+  lighton-small:
+    <<: [*worker, *vlm-image]
+    profiles: [lighton_small]
+    environment:
+      <<: *environment
+      OCR_WORKER_BACKEND: lighton_small
+    depends_on:
+      models-lighton-small:
+        condition: service_completed_successfully
+
+  models-jina:
+    <<: *model-preparation
+    profiles: [jina]
+    environment:
+      <<: *environment
+      OCR_ENABLED_BACKENDS: jina
+      OCR_ALLOW_MODEL_DOWNLOAD: ${OCR_ALLOW_MODEL_DOWNLOAD:-true}
+
+  jina:
+    <<: [*worker, *jina-image]
+    profiles: [jina]
+    environment:
+      <<: *environment
+      OCR_WORKER_BACKEND: jina
+    depends_on:
+      models-jina:
+        condition: service_completed_successfully
+
+  models-surya:
+    <<: *model-preparation
+    profiles: [surya]
+    environment:
+      <<: *environment
+      OCR_ENABLED_BACKENDS: surya
+      OCR_ALLOW_MODEL_DOWNLOAD: ${OCR_ALLOW_MODEL_DOWNLOAD:-true}
+
+  surya:
+    <<: [*worker, *vlm-image]
+    profiles: [surya]
+    environment:
+      <<: *environment
+      OCR_WORKER_BACKEND: surya
+    depends_on:
+      models-surya:
+        condition: service_completed_successfully
+
+  models-falcon:
+    <<: *model-preparation
+    profiles: [falcon]
+    environment:
+      <<: *environment
+      OCR_ENABLED_BACKENDS: falcon
+      OCR_ALLOW_MODEL_DOWNLOAD: ${OCR_ALLOW_MODEL_DOWNLOAD:-true}
+
+  falcon:
+    <<: [*worker, *falcon-image]
+    profiles: [falcon]
+    environment:
+      <<: *environment
+      OCR_WORKER_BACKEND: falcon
+    depends_on:
+      models-falcon:
+        condition: service_completed_successfully
+
+  models-nemotron:
+    <<: *model-preparation
+    profiles: [nemotron]
+    environment:
+      <<: *environment
+      OCR_ENABLED_BACKENDS: nemotron
+      OCR_ALLOW_MODEL_DOWNLOAD: ${OCR_ALLOW_MODEL_DOWNLOAD:-true}
+
+  nemotron:
+    <<: [*worker, *nemotron-image]
+    profiles: [nemotron]
+    environment:
+      <<: *environment
+      OCR_WORKER_BACKEND: nemotron
+    depends_on:
+      models-nemotron:
+        condition: service_completed_successfully
 
 volumes:
   data:
   models:
-
-networks:
-  runtime:
-    # An internal-only bridge suppresses published ports in Docker/Podman.
-    # The API makes no outbound calls; the OCR worker has network_mode: none.
-    driver: bridge

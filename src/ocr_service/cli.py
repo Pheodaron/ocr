@@ -42,17 +42,50 @@ def main() -> None:
         from .models import ModelsUnavailable, copy_local_models, prepare_models, verify_models
 
         try:
-            if args.command == "check-models":
-                manifest = verify_models(settings.models_dir)
-            elif args.import_from:
-                copy_local_models(args.import_from, settings.models_dir)
-                manifest = verify_models(settings.models_dir)
-            else:
-                manifest = prepare_models(settings.models_dir, allow_download=args.download)
+            for backend in settings.backends:
+                if backend == "paddle":
+                    if args.command == "check-models":
+                        manifest = verify_models(settings.models_dir)
+                    elif args.import_from:
+                        copy_local_models(args.import_from, settings.models_dir)
+                        manifest = verify_models(settings.models_dir)
+                    else:
+                        manifest = prepare_models(settings.models_dir, allow_download=args.download)
+                elif backend in {"falcon", "nemotron"}:
+                    from .hf_models import prepare_hf, verify_hf
+
+                    manifest = (
+                        verify_hf(backend, settings)
+                        if args.command == "check-models"
+                        else prepare_hf(
+                            backend, settings, download=args.download, source=args.import_from
+                        )
+                    )
+                elif backend == "kdl":
+                    from .kdl_models import prepare_kdl, verify_kdl
+
+                    manifest = (
+                        verify_kdl(settings)
+                        if args.command == "check-models"
+                        else prepare_kdl(settings, download=args.download, source=args.import_from)
+                    )
+                else:
+                    from .vlm_models import prepare_vlm, verify_vlm
+
+                    manifest = (
+                        verify_vlm(backend, settings)
+                        if args.command == "check-models"
+                        else prepare_vlm(
+                            backend, settings, download=args.download, source=args.import_from
+                        )
+                    )
+                logging.info(
+                    "Verified %s local models: %s", backend, manifest.get("revision", "Paddle")
+                )
         except ModelsUnavailable as error:
             logging.error("%s", error)
             sys.exit(1)
-        logging.info("Verified %d local models in %s", len(manifest["models"]), settings.models_dir)
+        logging.info("Verified models in %s", settings.models_dir)
 
 
 if __name__ == "__main__":

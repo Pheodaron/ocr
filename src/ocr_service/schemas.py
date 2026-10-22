@@ -16,7 +16,7 @@ class TextFragment(BaseModel):
 class Block(BaseModel):
     kind: str
     text: str = ""
-    bbox: list[float] = Field(min_length=4, max_length=4)
+    bbox: list[float] | None = Field(None, min_length=4, max_length=4)
 
 
 class Cell(BaseModel):
@@ -53,6 +53,7 @@ class PageResult(BaseModel):
     seconds: float = 0
     attempts: int = 0
     passes: list[dict] = Field(default_factory=list)
+    metrics: dict = Field(default_factory=dict)
     image_url: str | None = None
 
 
@@ -69,6 +70,16 @@ class JobSummary(BaseModel):
     created_at: str
     updated_at: str
     error: str | None = None
+    backend: str = "paddle"
+    comparison_id: str | None = None
+    processing_seconds: float = 0
+    model_load_seconds: float = 0
+    configuration: dict = Field(default_factory=dict)
+
+
+class Comparison(BaseModel):
+    id: str
+    jobs: list[JobSummary]
 
 
 class DocumentResult(BaseModel):

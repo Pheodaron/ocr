@@ -4,6 +4,7 @@ from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 
+from .backends import configuration_details
 from .schemas import JobSummary, PageResult
 
 
@@ -60,21 +61,76 @@ class Database:
                     job_id TEXT,
                     error TEXT
                 );
+                CREATE TABLE IF NOT EXISTS workers (
+                    backend TEXT PRIMARY KEY,
+                    state TEXT NOT NULL,
+                    heartbeat TEXT NOT NULL,
+                    job_id TEXT,
+                    error TEXT
+                );
             """)
+            db.execute("BEGIN IMMEDIATE")
+            columns = {row["name"] for row in db.execute("PRAGMA table_info(jobs)")}
+            for name, definition in {
+                "backend": "TEXT NOT NULL DEFAULT 'paddle'",
+                "comparison_id": "TEXT",
+                "processing_seconds": "REAL NOT NULL DEFAULT 0",
+                "model_load_seconds": "REAL NOT NULL DEFAULT 0",
+                "run_attempts": "INTEGER NOT NULL DEFAULT 0",
+            }.items():
+                if name not in columns:
+                    db.execute(f"ALTER TABLE jobs ADD COLUMN {name} {definition}")
+            db.execute("CREATE INDEX IF NOT EXISTS jobs_comparison ON jobs(comparison_id)")
 
-    def create_job(self, job_id: str, filename: str, digest: str, pages: int, config: dict) -> None:
-        timestamp = now()
+    def create_job(
+        self,
+        job_id: str,
+        filename: str,
+        digest: str,
+        pages: int,
+        config: dict,
+        backend: str = "paddle",
+        comparison_id: str | None = None,
+    ) -> None:
+        self.create_jobs(
+            [
+                {
+                    "id": job_id,
+                    "filename": filename,
+                    "digest": digest,
+                    "pages": pages,
+                    "config": config,
+                    "backend": backend,
+                    "comparison_id": comparison_id,
+                }
+            ]
+        )
+
+    def create_jobs(self, jobs: list[dict]) -> None:
+        # Publish a complete comparison atomically; the worker cannot claim half a batch.
         with self.connect() as db:
-            db.execute(
-                "INSERT INTO jobs "
-                "(id,filename,sha256,status,page_count,created_at,updated_at,config_json) "
-                "VALUES (?,?,?,'queued',?,?,?,?)",
-                (job_id, filename, digest, pages, timestamp, timestamp, json.dumps(config)),
-            )
-            db.executemany(
-                "INSERT INTO pages(job_id,number) VALUES (?,?)",
-                [(job_id, number) for number in range(1, pages + 1)],
-            )
+            for job in jobs:
+                timestamp = now()
+                db.execute(
+                    "INSERT INTO jobs "
+                    "(id,filename,sha256,status,page_count,created_at,updated_at,config_json,"
+                    "backend,comparison_id) VALUES (?,?,?,'queued',?,?,?,?,?,?)",
+                    (
+                        job["id"],
+                        job["filename"],
+                        job["digest"],
+                        job["pages"],
+                        timestamp,
+                        timestamp,
+                        json.dumps(job["config"]),
+                        job["backend"],
+                        job["comparison_id"],
+                    ),
+                )
+                db.executemany(
+                    "INSERT INTO pages(job_id,number) VALUES (?,?)",
+                    [(job["id"], number) for number in range(1, job["pages"] + 1)],
+                )
 
     def get_job(self, job_id: str) -> dict | None:
         with self.connect() as db:
@@ -94,7 +150,11 @@ class Database:
             ).fetchone()
             if row is None:
                 raise KeyError(job_id)
-            return JobSummary.model_validate(dict(row))
+            record = dict(row)
+            record["configuration"] = configuration_details(
+                record["backend"], json.loads(record["config_json"])
+            )
+            return JobSummary.model_validate(record)
 
     def recent(self, limit: int = 30) -> list[JobSummary]:
         with self.connect() as db:
@@ -102,6 +162,36 @@ class Database:
                 "SELECT id FROM jobs ORDER BY created_at DESC LIMIT ?", (limit,)
             ).fetchall()
         return [self.summary(row["id"]) for row in ids]
+
+    def comparison_jobs(self, comparison_id: str) -> list[JobSummary]:
+        with self.connect() as db:
+            rows = db.execute(
+                "SELECT id FROM jobs WHERE comparison_id=? ORDER BY created_at", (comparison_id,)
+            ).fetchall()
+        return [self.summary(row["id"]) for row in rows]
+
+    def delete_job(self, job_id: str) -> None:
+        with self.connect() as db:
+            db.execute("DELETE FROM jobs WHERE id=?", (job_id,))
+
+    def record_timings(self, job_id: str, processing: float = 0, loading: float = 0) -> None:
+        with self.connect() as db:
+            db.execute(
+                "UPDATE jobs SET processing_seconds=processing_seconds+?,"
+                "model_load_seconds=model_load_seconds+? WHERE id=?",
+                (round(processing, 3), round(loading, 3), job_id),
+            )
+
+    def fail_job(self, job_id: str, error: str) -> None:
+        for page in self.pages(job_id):
+            if page.status not in {"completed", "failed"}:
+                page.status = "failed"
+                page.error = error[:2000]
+                page.needs_review = True
+                self.save_page(job_id, page)
+        self.finish_job(job_id)
+        with self.connect() as db:
+            db.execute("UPDATE jobs SET error=? WHERE id=?", (error[:2000], job_id))
 
     def pages(self, job_id: str) -> list[PageResult]:
         with self.connect() as db:
@@ -115,18 +205,30 @@ class Database:
             for row in rows
         ]
 
-    def claim_job(self) -> dict | None:
+    def claim_job(self, backends: list[str] | None = None) -> dict | None:
         with self.connect() as db:
             db.execute("BEGIN IMMEDIATE")
+            condition = ""
+            parameters = []
+            if backends is not None:
+                if not backends:
+                    return None
+                condition = " AND backend IN (" + ",".join("?" for _ in backends) + ")"
+                parameters = backends
             row = db.execute(
-                "SELECT * FROM jobs WHERE status='queued' ORDER BY created_at LIMIT 1"
+                "SELECT * FROM jobs WHERE status='queued'"
+                + condition
+                + " ORDER BY created_at LIMIT 1",
+                parameters,
             ).fetchone()
             if row is None:
                 return None
             db.execute(
-                "UPDATE jobs SET status='processing',updated_at=? WHERE id=?", (now(), row["id"])
+                "UPDATE jobs SET status='processing',run_attempts=run_attempts+1,updated_at=? "
+                "WHERE id=?",
+                (now(), row["id"]),
             )
-            return dict(row)
+            return {**dict(row), "run_attempts": row["run_attempts"] + 1}
 
     def start_page(self, job_id: str, number: int) -> int:
         with self.connect() as db:
@@ -171,10 +273,21 @@ class Database:
             )
         return status
 
-    def recover(self, max_attempts: int) -> None:
-        # Only the process holding the exclusive worker lock may call this.
+    def recover(self, max_attempts: int, backends: list[str] | None = None) -> None:
+        # Hold the backend-specific lock. Never reset a different service's active job.
+        condition = ""
+        parameters = []
+        if backends is not None:
+            if not backends:
+                return
+            condition = " AND backend IN (" + ",".join("?" for _ in backends) + ")"
+            parameters = backends
         with self.connect() as db:
-            rows = db.execute("SELECT * FROM pages WHERE status='processing'").fetchall()
+            rows = db.execute(
+                "SELECT pages.* FROM pages JOIN jobs ON jobs.id=pages.job_id "
+                "WHERE pages.status='processing'" + condition,
+                parameters,
+            ).fetchall()
             for row in rows:
                 if row["attempts"] >= max_attempts:
                     page = PageResult(
@@ -195,11 +308,28 @@ class Database:
                         (row["job_id"], row["number"]),
                     )
             db.execute(
-                "UPDATE jobs SET status='queued',updated_at=? WHERE status='processing'", (now(),)
+                "UPDATE jobs SET status='queued',updated_at=? WHERE status='processing'"
+                + condition,
+                [now(), *parameters],
             )
 
-    def heartbeat(self, state: str, job_id: str | None = None, error: str | None = None) -> None:
+    def heartbeat(
+        self,
+        state: str,
+        job_id: str | None = None,
+        error: str | None = None,
+        backend: str | None = None,
+    ) -> None:
         with self.connect() as db:
+            if backend is not None:
+                db.execute("DELETE FROM worker WHERE id=1")
+                db.execute(
+                    "INSERT INTO workers(backend,state,heartbeat,job_id,error) VALUES(?,?,?,?,?) "
+                    "ON CONFLICT(backend) DO UPDATE SET state=excluded.state,"
+                    "heartbeat=excluded.heartbeat,job_id=excluded.job_id,error=excluded.error",
+                    (backend, state, now(), job_id, error),
+                )
+                return
             db.execute(
                 "INSERT INTO worker(id,state,heartbeat,job_id,error) VALUES(1,?,?,?,?) "
                 "ON CONFLICT(id) DO UPDATE SET state=excluded.state,heartbeat=excluded.heartbeat,"
@@ -207,7 +337,10 @@ class Database:
                 (state, now(), job_id, error),
             )
 
-    def worker(self) -> dict | None:
+    def worker(self, backend: str | None = None) -> dict | None:
         with self.connect() as db:
-            row = db.execute("SELECT * FROM worker WHERE id=1").fetchone()
+            if backend:
+                row = db.execute("SELECT * FROM workers WHERE backend=?", (backend,)).fetchone()
+            else:
+                row = db.execute("SELECT * FROM worker WHERE id=1").fetchone()
             return dict(row) if row else None

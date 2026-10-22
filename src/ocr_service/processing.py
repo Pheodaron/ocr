@@ -93,10 +93,32 @@ def process_page(
             processed = prediction.image
             raw = json.loads(json.dumps(prediction.raw, default=json_default))
             atomic_json(directory / f"page-{number}-{dpi}.raw.json", raw)
-            candidate = adapt_prediction(
-                raw, number, dpi, processed.shape[1], processed.shape[0], settings.review_threshold
+            if prediction.format == "kdl":
+                from .vlm_adapter import adapt_kdl
+
+                candidate = adapt_kdl(raw, number, dpi, processed.shape[1], processed.shape[0])
+            elif prediction.format == "vlm":
+                from .vlm_adapter import adapt_vlm
+
+                candidate = adapt_vlm(raw, number, dpi, processed.shape[1], processed.shape[0])
+            else:
+                candidate = adapt_prediction(
+                    raw,
+                    number,
+                    dpi,
+                    processed.shape[1],
+                    processed.shape[0],
+                    settings.review_threshold,
+                )
+            candidate.metrics.update(prediction.metrics)
+            passes.append(
+                {
+                    "dpi": dpi,
+                    "confidence": candidate.confidence,
+                    "error": None,
+                    "metrics": candidate.metrics,
+                }
             )
-            passes.append({"dpi": dpi, "confidence": candidate.confidence, "error": None})
             # Keep the retry only when confidence improves without substantial text loss.
             if (
                 selected is None
@@ -110,7 +132,7 @@ def process_page(
                     candidate.warnings.append("Текст повторного прохода отличается от первого")
                     candidate.needs_review = True
                 selected, selected_image = candidate, processed
-            if not candidate.needs_review:
+            if not candidate.needs_review or not getattr(engine, "retry_on_review", True):
                 break
         except Exception as error:
             LOGGER.exception("Page %s failed at %s dpi", number, dpi)
@@ -129,6 +151,7 @@ def process_page(
 def process_job(
     db: Database, job: dict, engine, settings: Settings, stopping=lambda: False
 ) -> None:
+    processing_started = time.monotonic()
     job_id = job["id"]
     directory = document_path(settings, job_id)
     source = directory / "source.pdf"
@@ -141,6 +164,7 @@ def process_job(
         if page.status in {"completed", "failed"}:
             continue
         if stopping():
+            db.record_timings(job_id, processing=time.monotonic() - processing_started)
             return
         attempts = db.start_page(job_id, page.number)
         started = time.monotonic()
@@ -162,4 +186,5 @@ def process_job(
             if (directory / f"page-{page.number}.png").is_file():
                 result.image_url = f"/api/documents/{job_id}/pages/{page.number}/image"
         db.save_page(job_id, result)
+    db.record_timings(job_id, processing=time.monotonic() - processing_started)
     db.finish_job(job_id)

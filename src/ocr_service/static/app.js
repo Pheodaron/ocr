@@ -5,6 +5,18 @@ const terminal = new Set(["completed","partial","failed"]);
 let selectedId = localStorage.getItem("ocr-document");
 let pollTimer;
 let maxUploadMb = 64;
+let comparisonId = localStorage.getItem("ocr-comparison");
+let comparisonTimer;
+const completedResults = new Map();
+const backendLabels = new Map();
+const backendOnline = new Map();
+
+function configurationLabel(job) {
+  const profile = job.configuration;
+  if (!profile) return backendLabels.get(job.backend) || job.backend;
+  return profile.label + (profile.quantization ? ` · ${profile.quantization}` : "")
+    + (profile.task ? ` · ${profile.task}` : "") + (profile.context ? ` · ctx ${profile.context}` : "");
+}
 
 async function request(url, options) {
   const response = await fetch(url, options);
@@ -80,13 +92,15 @@ async function pollJob(id) {
   try {
     const job = await request(`/api/documents/${id}`);
     if (selectedId !== id) return;
-    $("filename").textContent = job.filename; badge($("job-state"), job.status);
+    $("filename").textContent = `${job.filename} · ${configurationLabel(job)}`; badge($("job-state"), job.status);
     $("progress").max = job.page_count; $("progress").value = job.processed_pages;
     $("progress-text").textContent = `Обработано ${job.processed_pages} из ${job.page_count} · ошибок: ${job.failed_pages} · на проверку: ${job.review_pages}`;
     if (terminal.has(job.status)) {
       const result = await request(`/api/documents/${id}/result`);
       if (selectedId !== id) return;
       renderPages(result); $("downloads").hidden = false;
+      $("engine-details").textContent = `Загрузка модели: ${job.model_load_seconds.toFixed(1)} с · обработка: ${job.processing_seconds.toFixed(1)} с`;
+      if (job.error) $("engine-details").textContent += ` · ${job.error}`;
       document.querySelectorAll("[data-format]").forEach((link) => { link.href = `/api/documents/${id}/download?format=${link.dataset.format}`; });
       await refreshHistory();
     } else pollTimer = setTimeout(() => pollJob(id), 1500);
@@ -102,15 +116,64 @@ async function refreshHistory() {
   const jobs = await request("/api/documents"); $("history").replaceChildren();
   if (!jobs.length) $("history").append(node("li", "Документов пока нет", "muted"));
   for (const job of jobs) {
-    const item = node("li"); const button = node("button", job.filename);
-    button.addEventListener("click", () => showJob(job.id));
+    const item = node("li"); const button = node("button", `${job.filename} · ${configurationLabel(job)}`);
+    button.addEventListener("click", () => { showJob(job.id); if (job.comparison_id) showComparison(job.comparison_id); });
     const state = node("span"); badge(state, job.status); item.append(button, state); $("history").append(item);
+  }
+}
+
+async function showComparison(id) {
+  clearTimeout(comparisonTimer);
+  comparisonId = id; localStorage.setItem("ocr-comparison", id);
+  $("comparison").hidden = false;
+  try {
+    const comparison = await request(`/api/comparisons/${id}`);
+    if (comparisonId !== id) return;
+    $("comparison-json").href = `/api/comparisons/${id}`;
+    $("comparison-json").download = `comparison-${id}.json`;
+    const rows = [];
+    for (const job of comparison.jobs) {
+      let result = completedResults.get(job.id);
+      if (!result && terminal.has(job.status)) {
+        result = await request(`/api/documents/${job.id}/result`);
+        // Final timing is written just after the document status. Cache only the result.
+        completedResults.set(job.id, result);
+      }
+      const row = node("tr"); row.append(node("td", configurationLabel(job)));
+      const state = node("td"); badge(state, job.status);
+      if (job.status === "queued" && backendOnline.get(job.backend) === false) state.textContent = "Ожидает запуска сервиса";
+      row.append(state);
+      row.append(node("td", job.model_load_seconds.toFixed(1)), node("td", job.processing_seconds.toFixed(1)));
+      let tables = 0, cells = 0, tokens = 0, milliseconds = 0;
+      for (const page of result?.pages || []) {
+        tables += page.tables.length;
+        cells += page.tables.reduce((total, table) => total + table.cells.length, 0);
+        const timing = page.metrics?.timings;
+        if (timing?.predicted_ms > 0 && timing.predicted_n > 0) {
+          tokens += timing.predicted_n; milliseconds += timing.predicted_ms;
+        }
+      }
+      row.append(node("td", result ? `${tables} / ${cells}` : "—"), node("td", milliseconds ? (1000 * tokens / milliseconds).toFixed(2) : "—"));
+      const action = node("td"), button = node("button", "Открыть");
+      button.addEventListener("click", () => showJob(job.id)); action.append(button); row.append(action); rows.push(row);
+    }
+    if (comparisonId !== id) return;
+    $("comparison-rows").replaceChildren(...rows);
+    if (comparison.jobs.some((job) => !terminal.has(job.status))) comparisonTimer = setTimeout(() => showComparison(id), 2000);
+  } catch (error) {
+    $("message").textContent = error.message;
+    if (comparisonId === id) comparisonTimer = setTimeout(() => showComparison(id), 5000);
   }
 }
 
 async function refreshHealth() {
   try {
-    const {worker} = await request("/health");
+    const {worker, workers} = await request("/health");
+    for (const [backend, status] of Object.entries(workers || {})) {
+      backendOnline.set(backend, status.ready);
+      const indicator = document.getElementById(`backend-${backend}`);
+      if (indicator) indicator.textContent = status.ready ? " · запущен" : " · сервис выключен / не готов";
+    }
     const descriptions = {loading:"Загрузка моделей…",idle:"Сервис готов",processing:"Сервис работает",offline:"Worker не запущен",error:"Ошибка запуска OCR"};
     $("worker-state").textContent = descriptions[worker.state] || worker.state;
     $("worker-state").className = "badge " + (worker.ready ? "good" : "warning");
@@ -126,13 +189,37 @@ $("upload-form").addEventListener("submit", async (event) => {
   $("upload-button").disabled = true; $("message").textContent = "Загрузка PDF…";
   const form = new FormData(); form.append("file", file);
   try {
-    const job = await request("/api/documents", {method:"POST",body:form});
+    const backends = [...document.querySelectorAll("input[name=backend]:checked")].map((input) => input.value);
+    if (!backends.length) throw new Error("Выберите хотя бы одну конфигурацию");
+    let job;
+    if (backends.length > 1) {
+      backends.forEach((backend) => form.append("backends", backend));
+      const comparison = await request("/api/comparisons", {method:"POST",body:form});
+      job = comparison.jobs[0]; await showComparison(comparison.id);
+    } else {
+      form.append("backend", backends[0]);
+      job = await request("/api/documents", {method:"POST",body:form});
+      clearTimeout(comparisonTimer); comparisonId = null;
+      localStorage.removeItem("ocr-comparison"); $("comparison").hidden = true;
+    }
     $("message").textContent = "Документ принят. Обработка продолжится, даже если закрыть страницу.";
     await showJob(job.id); await refreshHistory();
   } catch (error) { $("message").textContent = error.message; }
   finally { $("upload-button").disabled = false; }
 });
 $("refresh").addEventListener("click", () => refreshHistory().catch((error) => { $("message").textContent = error.message; }));
-request("/api/config").then((config) => { maxUploadMb = config.max_upload_mb; $("limits").textContent = `До ${config.max_upload_mb} МБ и ${config.max_pages} страниц. Обработка на CPU; результаты сохраняются на сервере.`; }).catch(() => {});
+request("/api/config").then((config) => {
+  maxUploadMb = config.max_upload_mb;
+  $("limits").textContent = `До ${config.max_upload_mb} МБ и ${config.max_pages} страниц. Обработка на CPU; результаты сохраняются на сервере.`;
+  $("backends").replaceChildren();
+  config.backends.forEach((backend, index) => {
+    const label = node("label"), input = node("input"), indicator = node("span", "", "muted");
+    indicator.id = `backend-${backend.id}`;
+    input.type = "checkbox"; input.name = "backend"; input.value = backend.id; input.checked = index === 0;
+    const text = backend.label + (backend.quantization ? ` · ${backend.quantization}` : "") + (backend.task ? ` · ${backend.task}` : "");
+    backendLabels.set(backend.id, text); label.append(input, document.createTextNode(text), indicator); $("backends").append(label);
+  });
+}).catch((error) => { $("message").textContent = error.message; });
 refreshHealth(); refreshHistory().catch((error) => { $("message").textContent = error.message; });
 if (selectedId) showJob(selectedId);
+if (comparisonId) showComparison(comparisonId);

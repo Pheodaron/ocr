@@ -1,6 +1,27 @@
 # syntax=docker/dockerfile:1
 FROM ghcr.io/astral-sh/uv:0.12.23 AS uv
-FROM python:3.12-slim-bookworm
+FROM debian:bookworm-slim AS llama-build
+ARG LLAMA_COMMIT=47a39665e7081dc482feec169961acc09750a5c4
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      ca-certificates git cmake build-essential \
+    && rm -rf /var/lib/apt/lists/*
+RUN --mount=type=secret,id=proxy_ca \
+    if [ -f /run/secrets/proxy_ca ]; then export GIT_SSL_CAINFO=/run/secrets/proxy_ca; fi; \
+    git init /src && git -C /src fetch --depth=1 https://github.com/ggml-org/llama.cpp.git "$LLAMA_COMMIT" \
+    && git -C /src checkout FETCH_HEAD \
+    && cmake -S /src -B /build -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF \
+      -DGGML_NATIVE=OFF -DGGML_AVX2=ON -DGGML_AVX512=OFF -DGGML_CUDA=OFF \
+      -DLLAMA_CURL=OFF -DLLAMA_OPENSSL=OFF -DLLAMA_BUILD_TESTS=OFF \
+    && cmake --build /build --target llama-server -j 2
+
+# Jina uses DeepSeek OCR with rope_theta=1e6. The downstream operation already
+# consumes the configured frequency; remove the obsolete 10000-only assertion.
+FROM llama-build AS llama-jina-build
+RUN test "$(grep -F -c 'GGML_ASSERT(fabs(freq_base - 10000.0) < 1e-4);' /src/src/models/deepseek2.cpp)" = 1 \
+    && sed -i 's/GGML_ASSERT(fabs(freq_base - 10000.0) < 1e-4);/\/\/ Jina OCR: honor configured rope_theta, including 1e6./' /src/src/models/deepseek2.cpp \
+    && cmake --build /build --target llama-server -j 2
+
+FROM python:3.12-slim-bookworm AS base
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
@@ -29,8 +50,53 @@ COPY THIRD_PARTY_NOTICES.md LICENSES ./licenses/
 # No session certificate is stored in the resulting image.
 RUN --mount=type=secret,id=proxy_ca --mount=type=cache,target=/root/.cache/uv \
     if [ -f /run/secrets/proxy_ca ]; then export SSL_CERT_FILE=/run/secrets/proxy_ca; fi; \
-    uv sync --frozen --extra ocr --no-dev --no-editable
+    uv sync --frozen --no-dev --no-editable
 
 USER 10001:10001
 EXPOSE 8000
 CMD ["ocr-service", "api", "--host", "0.0.0.0"]
+
+FROM base AS api
+
+FROM base AS vlm
+COPY --from=llama-build /build/bin/llama-server /usr/local/bin/llama-server
+COPY --from=llama-build /src/LICENSE /usr/local/share/licenses/llama.cpp-MIT.txt
+CMD ["ocr-service", "worker"]
+
+FROM base AS paddle
+USER root
+RUN --mount=type=secret,id=proxy_ca --mount=type=cache,target=/root/.cache/uv \
+    if [ -f /run/secrets/proxy_ca ]; then export SSL_CERT_FILE=/run/secrets/proxy_ca; fi; \
+    uv sync --frozen --extra ocr --no-dev --no-editable
+USER 10001:10001
+CMD ["ocr-service", "worker"]
+
+FROM base AS kdl
+USER root
+RUN --mount=type=secret,id=proxy_ca --mount=type=cache,target=/root/.cache/uv \
+    if [ -f /run/secrets/proxy_ca ]; then export SSL_CERT_FILE=/run/secrets/proxy_ca; fi; \
+    uv sync --frozen --extra kdl --no-dev --no-editable
+USER 10001:10001
+CMD ["ocr-service", "worker"]
+
+FROM base AS jina
+COPY --from=llama-jina-build /build/bin/llama-server /usr/local/bin/llama-server
+COPY --from=llama-jina-build /src/LICENSE /usr/local/share/licenses/llama.cpp-MIT.txt
+ENV OCR_LLAMA_PATCH=jina-rope-theta
+CMD ["ocr-service", "worker"]
+
+FROM base AS falcon
+USER root
+RUN --mount=type=secret,id=proxy_ca --mount=type=cache,target=/root/.cache/uv \
+    if [ -f /run/secrets/proxy_ca ]; then export SSL_CERT_FILE=/run/secrets/proxy_ca; fi; \
+    uv sync --frozen --extra falcon --no-dev --no-editable
+USER 10001:10001
+CMD ["ocr-service", "worker"]
+
+FROM base AS nemotron
+USER root
+RUN --mount=type=secret,id=proxy_ca --mount=type=cache,target=/root/.cache/uv \
+    if [ -f /run/secrets/proxy_ca ]; then export SSL_CERT_FILE=/run/secrets/proxy_ca; fi; \
+    uv sync --frozen --extra nemotron --no-dev --no-editable
+USER 10001:10001
+CMD ["ocr-service", "worker"]

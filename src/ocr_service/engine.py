@@ -1,6 +1,6 @@
 import copy
 import importlib.metadata
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import yaml
@@ -61,6 +61,8 @@ def pipeline_config(settings: Settings) -> dict:
 class Prediction:
     raw: dict
     image: object  # numpy BGR image; keep numpy/Paddle out of the API process
+    format: str = "paddle"
+    metrics: dict = field(default_factory=dict)
 
 
 class PaddleEngine:

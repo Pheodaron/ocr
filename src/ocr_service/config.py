@@ -3,6 +3,8 @@ from pathlib import Path
 from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from .catalog import LABELS
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="OCR_", env_file=".env", extra="ignore")
@@ -20,12 +22,43 @@ class Settings(BaseSettings):
     max_page_attempts: int = Field(2, ge=1, le=5)
     poll_seconds: float = Field(1, ge=0.1, le=30)
     worker_stale_seconds: int = Field(45, ge=10)
+    enabled_backends: str = ",".join(LABELS)
+    worker_backend: str = "paddle"
+    dots_quantization: str = "Q5_K_M"
+    dots_context: int = Field(32768, ge=2048, le=131072)
+    glm_context: int = Field(16384, ge=2048, le=131072)
+    glm_task: str = "text"
+    vlm_max_tokens: int = Field(8192, ge=128, le=65536)
+    vlm_timeout_seconds: int = Field(3600, ge=10)
+    vlm_startup_seconds: int = Field(300, ge=10)
+    llama_server: str = "llama-server"
+    llama_port: int = Field(8081, ge=1024, le=65535)
+    kv_cache_type: str = "q8_0"
+    vlm_context: int = Field(16384, ge=2048, le=32768)
+    kdl_max_regions: int = Field(150, ge=1, le=1000)
+    kdl_max_pixels: int = Field(1_003_520, ge=3136, le=4_014_080)
 
     @model_validator(mode="after")
     def validate_dpi(self):
         if self.retry_dpi < self.dpi:
             raise ValueError("retry_dpi must be >= dpi")
+        if not self.backends or set(self.backends) - LABELS.keys():
+            raise ValueError(f"enabled_backends: use {','.join(LABELS)}")
+        if self.worker_backend not in LABELS:
+            raise ValueError("Unknown worker_backend")
+        if self.dots_quantization not in {"Q5_K_M", "Q8_0", "BF16"}:
+            raise ValueError("dots_quantization: use Q5_K_M, Q8_0 or BF16")
+        if self.glm_task not in {"text", "table"}:
+            raise ValueError("glm_task: use text or table")
+        if self.kv_cache_type not in {"f16", "q8_0"}:
+            raise ValueError("kv_cache_type: use f16 or q8_0")
         return self
+
+    @property
+    def backends(self) -> list[str]:
+        return list(
+            dict.fromkeys(item.strip() for item in self.enabled_backends.split(",") if item.strip())
+        )
 
     @property
     def db_path(self) -> Path:
@@ -37,5 +70,22 @@ class Settings(BaseSettings):
     def recognition_config(self) -> dict:
         return self.model_dump(
             mode="json",
-            include={"dpi", "retry_dpi", "review_threshold", "layout_threshold", "max_page_pixels"},
+            include={
+                "dpi",
+                "retry_dpi",
+                "review_threshold",
+                "layout_threshold",
+                "max_page_pixels",
+                "cpu_threads",
+                "dots_quantization",
+                "dots_context",
+                "glm_context",
+                "glm_task",
+                "vlm_max_tokens",
+                "kv_cache_type",
+                "vlm_timeout_seconds",
+                "vlm_context",
+                "kdl_max_regions",
+                "kdl_max_pixels",
+            },
         )

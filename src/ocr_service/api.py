@@ -1,5 +1,6 @@
 import hashlib
 import json
+import os
 import shutil
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
@@ -7,23 +8,24 @@ from pathlib import Path
 from typing import Annotated, Literal
 from uuid import uuid4
 
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi import Path as PathParam
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
 
+from .backends import configurations
 from .config import Settings
 from .db import Database
 from .exports import html_document, markdown_document
 from .processing import document_path, validate_pdf
-from .schemas import TERMINAL_STATUSES, DocumentResult, JobSummary, WorkerStatus
+from .schemas import TERMINAL_STATUSES, Comparison, DocumentResult, JobSummary, WorkerStatus
 
 JobId = Annotated[str, PathParam(pattern=r"^[0-9a-f]{32}$")]
 
 
-def worker_status(db: Database, settings: Settings) -> WorkerStatus:
-    record = db.worker()
+def worker_status(db: Database, settings: Settings, backend: str | None = None) -> WorkerStatus:
+    record = db.worker(backend)
     if record is None:
         return WorkerStatus()
     status = WorkerStatus.model_validate(record)
@@ -94,22 +96,55 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def health():
         with db.connect() as connection:
             connection.execute("SELECT 1")
-        return {"status": "ok", "worker": worker_status(db, settings)}
+        workers = {backend: worker_status(db, settings, backend) for backend in settings.backends}
+        return {"status": "ok", "worker": aggregate_status(workers), "workers": workers}
+
+    def aggregate_status(workers: dict[str, WorkerStatus]) -> WorkerStatus:
+        for state in ("processing", "idle", "error", "loading"):
+            for status in workers.values():
+                if status.state == state:
+                    return status
+        # Retain legacy heartbeat compatibility during upgrades.
+        return worker_status(db, settings)
 
     @app.get("/ready")
     def ready():
-        status = worker_status(db, settings)
+        workers = {backend: worker_status(db, settings, backend) for backend in settings.backends}
+        status = aggregate_status(workers)
         return JSONResponse(
-            {"ready": status.ready, "worker": status.model_dump()},
+            {
+                "ready": status.ready,
+                "worker": status.model_dump(),
+                "workers": {key: value.model_dump() for key, value in workers.items()},
+            },
             status_code=200 if status.ready else 503,
         )
 
     @app.get("/api/config")
     def public_config():
-        return {"max_upload_mb": settings.max_upload_mb, "max_pages": settings.max_pages}
+        return {
+            "max_upload_mb": settings.max_upload_mb,
+            "max_pages": settings.max_pages,
+            "backends": configurations(settings),
+        }
+
+    def validate_backends(backends: list[str]):
+        if (
+            not backends
+            or len(backends) != len(set(backends))
+            or any(backend not in settings.backends for backend in backends)
+        ):
+            raise HTTPException(422, f"Выберите разные движки из: {', '.join(settings.backends)}")
 
     @app.post("/api/documents", response_model=JobSummary, status_code=202)
-    async def upload_document(file: Annotated[UploadFile, File(description="PDF документ")]):
+    async def upload_document(
+        file: Annotated[UploadFile, File(description="PDF документ")],
+        backend: Annotated[str, Form()] = "paddle",
+    ):
+        validate_backends([backend])
+        return await save_upload(file, backend)
+
+    async def save_upload(file: UploadFile, backend: str, comparison_id: str | None = None):
         job_id = uuid4().hex
         directory = document_path(settings, job_id)
         directory.mkdir(parents=True)
@@ -134,19 +169,60 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 raise HTTPException(422, str(error)) from error
             filename = (file.filename or "document.pdf").replace("\\", "/").rsplit("/", 1)[-1]
             filename = "".join(char for char in filename if char.isprintable())[:255]
-            db.create_job(
-                job_id,
-                filename or "document.pdf",
-                digest.hexdigest(),
-                pages,
-                settings.recognition_config(),
-            )
+            record = {
+                "id": job_id,
+                "filename": filename or "document.pdf",
+                "digest": digest.hexdigest(),
+                "pages": pages,
+                "config": settings.recognition_config(),
+                "backend": backend,
+                "comparison_id": comparison_id,
+            }
+            if comparison_id is None:
+                db.create_jobs([record])
         except BaseException:
             shutil.rmtree(directory, ignore_errors=True)
             raise
         finally:
             await file.close()
-        return db.summary(job_id)
+        return record if comparison_id else db.summary(job_id)
+
+    @app.post("/api/comparisons", response_model=Comparison, status_code=202)
+    async def compare_document(
+        file: Annotated[UploadFile, File(description="Один PDF для всех конфигураций")],
+        backends: Annotated[list[str], Form()],
+    ):
+        validate_backends(backends)
+        comparison_id = uuid4().hex
+        created = []
+        try:
+            first = await save_upload(file, backends[0], comparison_id)
+            created.append(first["id"])
+            records = [first]
+            # Hard links avoid PDF copies; every job reads the same immutable source.
+            for backend in backends[1:]:
+                job_id = uuid4().hex
+                created.append(job_id)
+                directory = document_path(settings, job_id)
+                directory.mkdir()
+                os.link(
+                    document_path(settings, first["id"]) / "source.pdf", directory / "source.pdf"
+                )
+                records.append({**first, "id": job_id, "backend": backend})
+            db.create_jobs(records)
+        except BaseException:
+            for job_id in created:
+                db.delete_job(job_id)
+                shutil.rmtree(document_path(settings, job_id), ignore_errors=True)
+            raise
+        return Comparison(id=comparison_id, jobs=db.comparison_jobs(comparison_id))
+
+    @app.get("/api/comparisons/{comparison_id}", response_model=Comparison)
+    def get_comparison(comparison_id: JobId):
+        jobs = db.comparison_jobs(comparison_id)
+        if not jobs:
+            raise HTTPException(404, "Сравнение не найдено")
+        return Comparison(id=comparison_id, jobs=jobs)
 
     @app.get("/api/documents", response_model=list[JobSummary])
     def list_documents():

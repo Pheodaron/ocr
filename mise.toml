@@ -4,7 +4,7 @@ uv = "0.12.23"
 
 [tasks.install]
 description = "Установить зависимости, включая CPU OCR"
-run = "uv sync --frozen --extra ocr"
+run = "uv sync --frozen --extra ocr --extra kdl"
 
 [tasks.models]
 description = "Подготовить модели (требуется сеть при первом запуске)"
@@ -16,11 +16,11 @@ run = "uv run --frozen ocr-service api"
 
 [tasks.worker]
 description = "Запустить CPU OCR worker"
-run = "uv run --frozen --extra ocr ocr-service worker"
+run = "uv run --frozen --extra ocr --extra kdl ocr-service worker"
 
 [tasks.up]
 description = "Собрать и запустить приложение через Podman Compose"
-run = "podman compose up --build -d"
+run = 'podman compose --profile "${OCR_WORKER_BACKEND:-glm_ocr}" up --build -d'
 
 [tasks.down]
 description = "Остановить приложение, сохранив данные и модели"

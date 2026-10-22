@@ -16,6 +16,7 @@
     <section class="card">
       <form id="upload-form">
         <label for="pdf">Выберите PDF с текстом и таблицами</label>
+        <fieldset><legend>Конфигурации для сравнения</legend><div id="backends">Загрузка конфигураций…</div></fieldset>
         <div class="upload-row"><input id="pdf" name="file" type="file" accept="application/pdf,.pdf" required>
           <button id="upload-button" type="submit">Распознать</button></div>
         <p id="limits" class="muted">Обработка выполняется на CPU. Можно закрыть страницу и вернуться позже.</p>
@@ -23,10 +24,17 @@
       <p id="message" role="status" aria-live="polite"></p>
       <p id="worker-error" class="error" hidden></p>
     </section>
+    <section id="comparison" class="card" hidden>
+      <h2>Сравнение на одном PDF</h2>
+      <p class="muted">Запускайте нужные сервисы по одному через Compose-профили. Задания выключенных моделей ждут в очереди. Время обработки не включает очередь и загрузку модели. Число ячеек не является оценкой качества.</p>
+      <div class="table-scroll"><table><thead><tr><th>Конфигурация</th><th>Статус</th><th>Загрузка, с</th><th>Обработка, с</th><th>Таблицы / ячейки</th><th>Генерация, ток/с</th><th>Результат</th></tr></thead><tbody id="comparison-rows"></tbody></table></div>
+      <a id="comparison-json">Скачать статусы сравнения JSON</a>
+    </section>
     <section id="job" class="card" hidden>
       <div class="section-heading"><h2 id="filename"></h2><span id="job-state" class="badge"></span></div>
       <progress id="progress" max="1" value="0" aria-label="Прогресс распознавания"></progress>
       <p id="progress-text" class="muted" aria-live="polite"></p>
+      <p id="engine-details" class="muted"></p>
       <div id="downloads" class="downloads" hidden>
         <a data-format="json">Скачать JSON</a><a data-format="markdown">Скачать Markdown</a><a data-format="html">Скачать HTML</a>
       </div>

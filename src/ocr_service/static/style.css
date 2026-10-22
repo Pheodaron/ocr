@@ -4,3 +4,9 @@ fieldset { border: 1px solid #d7dce5; border-radius: 8px; margin: 1rem 0; }
 #backends { display: flex; flex-wrap: wrap; gap: .8rem 1.5rem; padding: .5rem; }
 #backends label { display: inline-flex; align-items: center; gap: .4rem; font-weight: normal; }
 #backends input { width: auto; }
+.job-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.job-actions button, #history .job-actions button { padding: 8px 12px; font-size: .85rem; background: #edf1f8; color: #244277; }
+.job-actions button.danger, #history .job-actions button.danger { background: #fce7e7; color: #9b3131; }
+#history li { flex-wrap: wrap; }
+#history li > button { flex: 1; min-width: 180px; }
+#history .job-actions { margin-top: 0; }

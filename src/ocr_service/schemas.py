@@ -2,9 +2,11 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-JobStatus = Literal["queued", "processing", "completed", "partial", "failed"]
-PageStatus = Literal["pending", "processing", "completed", "failed"]
-TERMINAL_STATUSES = {"completed", "partial", "failed"}
+JobStatus = Literal[
+    "queued", "processing", "cancelling", "cancelled", "completed", "partial", "failed"
+]
+PageStatus = Literal["pending", "processing", "cancelled", "completed", "failed"]
+TERMINAL_STATUSES = {"cancelled", "completed", "partial", "failed"}
 
 
 class TextFragment(BaseModel):
@@ -66,6 +68,7 @@ class JobSummary(BaseModel):
     processed_pages: int
     successful_pages: int
     failed_pages: int
+    cancelled_pages: int = 0
     review_pages: int
     created_at: str
     updated_at: str

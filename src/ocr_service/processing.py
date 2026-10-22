@@ -173,10 +173,13 @@ def process_job(
     for page in db.pages(job_id):
         if page.status in {"completed", "failed"}:
             continue
-        if stopping():
+        if stopping() or db.cancellation_requested(job_id):
             db.record_timings(job_id, processing=time.monotonic() - processing_started)
             return
         attempts = db.start_page(job_id, page.number)
+        if attempts is None:
+            db.record_timings(job_id, processing=time.monotonic() - processing_started)
+            return
         started = time.monotonic()
         try:
             result = process_page(
@@ -199,4 +202,5 @@ def process_job(
                 result.image_url = f"/api/documents/{job_id}/pages/{page.number}/image"
         db.save_page(job_id, result)
     db.record_timings(job_id, processing=time.monotonic() - processing_started)
-    db.finish_job(job_id)
+    if not db.cancellation_requested(job_id):
+        db.finish_job(job_id)

@@ -10,6 +10,8 @@
 <tr><td>GET</td><td>/api/config</td><td>Доступные движки, квантизации и лимиты.</td></tr>
 <tr><td>GET</td><td>/api/documents</td><td>Последние 30 заданий.</td></tr>
 <tr><td>GET</td><td>/api/documents/{id}</td><td>Статус и количество обработанных, успешных, ошибочных страниц.</td></tr>
+<tr><td>POST</td><td>/api/documents/{id}/cancel</td><td>Остановить задание, включая текущую страницу. Ответ 202: cancelling или cancelled; завершённые задания сохраняют свой статус.</td></tr>
+<tr><td>DELETE</td><td>/api/documents/{id}</td><td>Удалить PDF и результаты при любом статусе. Работающий процесс сначала останавливается. Ответ 200: deleted или 202: deleting. Задание сразу исчезает из списков.</td></tr>
 <tr><td>GET</td><td>/api/documents/{id}/result</td><td>JSON результата. Ответ 409, пока обработка не завершена.</td></tr>
 <tr><td>GET</td><td>/api/documents/{id}/download?format=json|markdown|html</td><td>Скачать результат файлом.</td></tr>
 <tr><td>GET</td><td>/api/documents/{id}/pages/{number}/image</td><td>PNG страницы с исправленной ориентацией. Нумерация с 1.</td></tr>
@@ -18,7 +20,7 @@
 </tbody></table></div>
 <p>Загрузка:</p><pre>curl -F 'file=@document.pdf' http://localhost:8000/api/documents</pre>
 <p>Получение результата:</p><pre>curl http://localhost:8000/api/documents/ID/result</pre>
-<p>Статусы: queued → processing → completed / partial / failed. partial означает, что часть страниц не обработана. needs_review — независимый признак необходимости проверки распознавания.</p>
+<p>Статусы: queued → processing → completed / partial / failed. Остановка: cancelling → cancelled. Готовые страницы остановленного задания доступны в результате и выгрузках; необработанные имеют статус cancelled. partial означает, что часть страниц не обработана. needs_review — независимый признак необходимости проверки распознавания.</p>
 <p>Координаты: [x_min, y_min, x_max, y_max], в пикселях изображения страницы после исправления ориентации. OCR score не является вероятностью достоверности значения.</p>
 <p>Для генеративного OCR confidence = null и needs_review = true. Координаты могут быть null; исходный layout dots остаётся в raw-ответе на сервере. Статистика generation находится в pages[].metrics, исходные ответы — page-N-DPI.raw.json в каталоге задания.</p>
 </section></main></body></html>

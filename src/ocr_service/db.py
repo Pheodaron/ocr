@@ -77,6 +77,7 @@ class Database:
                 "processing_seconds": "REAL NOT NULL DEFAULT 0",
                 "model_load_seconds": "REAL NOT NULL DEFAULT 0",
                 "run_attempts": "INTEGER NOT NULL DEFAULT 0",
+                "delete_requested": "INTEGER NOT NULL DEFAULT 0",
             }.items():
                 if name not in columns:
                     db.execute(f"ALTER TABLE jobs ADD COLUMN {name} {definition}")
@@ -143,6 +144,7 @@ class Database:
                 """SELECT j.*, SUM(p.status IN ('completed','failed')) AS processed_pages,
                     SUM(p.status='completed') AS successful_pages,
                     SUM(p.status='failed') AS failed_pages,
+                    SUM(p.status='cancelled') AS cancelled_pages,
                     SUM(CASE WHEN p.result_json IS NOT NULL THEN
                         json_extract(p.result_json,'$.needs_review') ELSE 0 END) AS review_pages
                     FROM jobs j JOIN pages p ON p.job_id=j.id WHERE j.id=? GROUP BY j.id""",
@@ -159,20 +161,102 @@ class Database:
     def recent(self, limit: int = 30) -> list[JobSummary]:
         with self.connect() as db:
             ids = db.execute(
-                "SELECT id FROM jobs ORDER BY created_at DESC LIMIT ?", (limit,)
+                "SELECT id FROM jobs WHERE delete_requested=0 ORDER BY created_at DESC LIMIT ?",
+                (limit,),
             ).fetchall()
-        return [self.summary(row["id"]) for row in ids]
+        return self._existing_summaries(ids)
 
     def comparison_jobs(self, comparison_id: str) -> list[JobSummary]:
         with self.connect() as db:
             rows = db.execute(
-                "SELECT id FROM jobs WHERE comparison_id=? ORDER BY created_at", (comparison_id,)
+                "SELECT id FROM jobs WHERE comparison_id=? AND delete_requested=0 "
+                "ORDER BY created_at",
+                (comparison_id,),
             ).fetchall()
-        return [self.summary(row["id"]) for row in rows]
+        return self._existing_summaries(rows)
+
+    def _existing_summaries(self, rows) -> list[JobSummary]:
+        summaries = []
+        for row in rows:
+            try:
+                summaries.append(self.summary(row["id"]))
+            except KeyError:
+                # A concurrent DELETE can remove an ID after the list query.
+                continue
+        return summaries
 
     def delete_job(self, job_id: str) -> None:
         with self.connect() as db:
             db.execute("DELETE FROM jobs WHERE id=?", (job_id,))
+
+    def request_cancel(self, job_id: str, *, delete: bool = False) -> None:
+        # Serialize with claim/finish: a queued job must never start after this request.
+        with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute("SELECT status FROM jobs WHERE id=?", (job_id,)).fetchone()
+            if row is None:
+                raise KeyError(job_id)
+            status = row["status"]
+            if status in {"queued", "processing"}:
+                status = "cancelling"
+            db.execute(
+                "UPDATE jobs SET status=?,delete_requested=MAX(delete_requested,?),updated_at=? "
+                "WHERE id=?",
+                (status, int(delete), now(), job_id),
+            )
+
+    def cancellation_requested(self, job_id: str) -> bool:
+        job = self.get_job(job_id)
+        return (
+            job is None
+            or job["status"] in {"cancelling", "cancelled"}
+            or bool(job["delete_requested"])
+        )
+
+    def pending_controls(self, backend: str) -> list[dict]:
+        with self.connect() as db:
+            return [
+                dict(row)
+                for row in db.execute(
+                    "SELECT * FROM jobs WHERE backend=? "
+                    "AND (status='cancelling' OR delete_requested=1)",
+                    (backend,),
+                )
+            ]
+
+    def finalize_cancel(self, job_id: str) -> None:
+        # Called only after the inference process has stopped (or before it was claimed).
+        with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            job = db.execute("SELECT * FROM jobs WHERE id=?", (job_id,)).fetchone()
+            if job is None or job["status"] != "cancelling":
+                return
+            rows = db.execute(
+                "SELECT * FROM pages WHERE job_id=? "
+                "AND status NOT IN ('completed','failed','cancelled')",
+                (job_id,),
+            ).fetchall()
+            for row in rows:
+                page = PageResult(
+                    number=row["number"],
+                    status="cancelled",
+                    attempts=row["attempts"],
+                    error="Распознавание остановлено пользователем",
+                )
+                db.execute(
+                    "UPDATE pages SET status='cancelled',result_json=? WHERE job_id=? AND number=?",
+                    (page.model_dump_json(), job_id, row["number"]),
+                )
+            db.execute(
+                "UPDATE jobs SET status='cancelled',error=?,updated_at=? WHERE id=?",
+                ("Распознавание остановлено пользователем", now(), job_id),
+            )
+
+    def finalize_unclaimed_cancel(self, job_id: str) -> None:
+        # A queued job has no inference child, so no live worker is needed to cancel it.
+        job = self.get_job(job_id)
+        if job and job["status"] == "cancelling" and job["run_attempts"] == 0:
+            self.finalize_cancel(job_id)
 
     def record_timings(self, job_id: str, processing: float = 0, loading: float = 0) -> None:
         with self.connect() as db:
@@ -183,6 +267,8 @@ class Database:
             )
 
     def fail_job(self, job_id: str, error: str) -> None:
+        if self.cancellation_requested(job_id):
+            return
         for page in self.pages(job_id):
             if page.status not in {"completed", "failed"}:
                 page.status = "failed"
@@ -191,7 +277,11 @@ class Database:
                 self.save_page(job_id, page)
         self.finish_job(job_id)
         with self.connect() as db:
-            db.execute("UPDATE jobs SET error=? WHERE id=?", (error[:2000], job_id))
+            db.execute(
+                "UPDATE jobs SET error=? WHERE id=? "
+                "AND status NOT IN ('cancelling','cancelled') AND delete_requested=0",
+                (error[:2000], job_id),
+            )
 
     def pages(self, job_id: str) -> list[PageResult]:
         with self.connect() as db:
@@ -216,7 +306,7 @@ class Database:
                 condition = " AND backend IN (" + ",".join("?" for _ in backends) + ")"
                 parameters = backends
             row = db.execute(
-                "SELECT * FROM jobs WHERE status='queued'"
+                "SELECT * FROM jobs WHERE status='queued' AND delete_requested=0"
                 + condition
                 + " ORDER BY created_at LIMIT 1",
                 parameters,
@@ -230,13 +320,16 @@ class Database:
             )
             return {**dict(row), "run_attempts": row["run_attempts"] + 1}
 
-    def start_page(self, job_id: str, number: int) -> int:
+    def start_page(self, job_id: str, number: int) -> int | None:
         with self.connect() as db:
-            db.execute(
+            updated = db.execute(
                 "UPDATE pages SET status='processing',attempts=attempts+1 "
-                "WHERE job_id=? AND number=?",
-                (job_id, number),
+                "WHERE job_id=? AND number=? AND EXISTS (SELECT 1 FROM jobs WHERE id=? "
+                "AND status='processing' AND delete_requested=0)",
+                (job_id, number, job_id),
             )
+            if updated.rowcount == 0:
+                return None
             row = db.execute(
                 "SELECT attempts FROM pages WHERE job_id=? AND number=?", (job_id, number)
             ).fetchone()
@@ -244,17 +337,23 @@ class Database:
 
     def save_page(self, job_id: str, page: PageResult) -> None:
         with self.connect() as db:
-            db.execute(
-                "UPDATE pages SET status=?,result_json=? WHERE job_id=? AND number=?",
-                (page.status, page.model_dump_json(), job_id, page.number),
+            updated = db.execute(
+                "UPDATE pages SET status=?,result_json=? WHERE job_id=? AND number=? "
+                "AND EXISTS (SELECT 1 FROM jobs WHERE id=? "
+                "AND status NOT IN ('cancelling','cancelled') AND delete_requested=0)",
+                (page.status, page.model_dump_json(), job_id, page.number, job_id),
             )
-            db.execute("UPDATE jobs SET updated_at=? WHERE id=?", (now(), job_id))
+            if updated.rowcount:
+                db.execute("UPDATE jobs SET updated_at=? WHERE id=?", (now(), job_id))
 
     def set_engine(self, job_id: str, metadata: dict) -> None:
         with self.connect() as db:
             db.execute("UPDATE jobs SET engine_json=? WHERE id=?", (json.dumps(metadata), job_id))
 
     def finish_job(self, job_id: str) -> str:
+        job = self.get_job(job_id)
+        if job and (job["status"] in {"cancelling", "cancelled"} or job["delete_requested"]):
+            return job["status"]
         summary = self.summary(job_id)
         if summary.processed_pages != summary.page_count:
             raise ValueError("Cannot finish a document with unfinished pages")
@@ -268,7 +367,8 @@ class Database:
         error = "Не удалось обработать ни одной страницы" if status == "failed" else None
         with self.connect() as db:
             db.execute(
-                "UPDATE jobs SET status=?,error=?,updated_at=? WHERE id=?",
+                "UPDATE jobs SET status=?,error=?,updated_at=? WHERE id=? "
+                "AND status NOT IN ('cancelling','cancelled') AND delete_requested=0",
                 (status, error, now(), job_id),
             )
         return status
@@ -285,7 +385,8 @@ class Database:
         with self.connect() as db:
             rows = db.execute(
                 "SELECT pages.* FROM pages JOIN jobs ON jobs.id=pages.job_id "
-                "WHERE pages.status='processing'" + condition,
+                "WHERE pages.status='processing' AND jobs.status='processing' "
+                "AND jobs.delete_requested=0" + condition,
                 parameters,
             ).fetchall()
             for row in rows:

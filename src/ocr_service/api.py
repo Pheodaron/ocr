@@ -18,6 +18,7 @@ from .backends import configurations
 from .config import Settings
 from .db import Database
 from .exports import html_document, markdown_document
+from .lifecycle import finalize_if_worker_absent
 from .processing import document_path, validate_pdf
 from .schemas import TERMINAL_STATUSES, Comparison, DocumentResult, JobSummary, WorkerStatus
 
@@ -78,7 +79,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     def require_job(job_id: str) -> dict:
         job = db.get_job(job_id)
-        if job is None:
+        if job is None or job["delete_requested"]:
             raise HTTPException(404, "Документ не найден")
         return job
 
@@ -232,6 +233,26 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def get_document(job_id: JobId):
         require_job(job_id)
         return db.summary(job_id)
+
+    @app.post("/api/documents/{job_id}/cancel", response_model=JobSummary, status_code=202)
+    def cancel_document(job_id: JobId):
+        require_job(job_id)
+        db.request_cancel(job_id)
+        db.finalize_unclaimed_cancel(job_id)
+        finalize_if_worker_absent(db, settings, job_id)
+        return db.summary(job_id)
+
+    @app.delete("/api/documents/{job_id}")
+    def delete_document(job_id: JobId):
+        # Retried DELETE remains valid while asynchronous cleanup is pending.
+        if db.get_job(job_id) is None:
+            raise HTTPException(404, "Документ не найден")
+        db.request_cancel(job_id, delete=True)
+        db.finalize_unclaimed_cancel(job_id)
+        finalize_if_worker_absent(db, settings, job_id)
+        if db.get_job(job_id) is None:
+            return JSONResponse({"id": job_id, "status": "deleted"})
+        return JSONResponse({"id": job_id, "status": "deleting"}, status_code=202)
 
     @app.get("/api/documents/{job_id}/result", response_model=DocumentResult)
     def get_result(job_id: JobId):

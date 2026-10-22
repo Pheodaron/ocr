@@ -10,12 +10,15 @@ import time
 from .backends import create_engine
 from .config import Settings
 from .db import Database
+from .lifecycle import arm_parent_death_signal
 from .processing import process_job
 
 
 def run_document(settings: Settings, job_id: str, engine_factory=create_engine) -> None:
     db = Database(settings.db_path)
     job = db.get_job(job_id)
+    if job is None or db.cancellation_requested(job_id):
+        return
     settings = settings.restore_recognition_config(json.loads(job["config_json"]))
     stopped = threading.Event()
 
@@ -43,5 +46,7 @@ def run_document(settings: Settings, job_id: str, engine_factory=create_engine) 
 
 
 if __name__ == "__main__":
+    if len(sys.argv) > 3:
+        arm_parent_death_signal(int(sys.argv[3]))
     logging.basicConfig(level=logging.INFO)
     run_document(Settings.model_validate_json(sys.argv[2]), sys.argv[1])

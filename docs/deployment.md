@@ -91,7 +91,7 @@ podman compose --profile '*' config > /dev/null
 
 ```sh
 podman compose --profile glm_ocr up --build -d
-podman compose --profile glm_ocr ps -a
+podman ps -a
 podman compose --profile glm_ocr logs -f models-glm-ocr glm-ocr api
 ```
 
@@ -104,6 +104,10 @@ podman compose --profile glm_ocr logs -f models-glm-ocr glm-ocr api
    проверяет файлы и сохраняет manifest в том `models`.
 3. После успешной подготовки запускается worker `glm-ocr`.
 4. API принимает PDF, worker забирает задания только `glm_ocr`.
+
+Для списка контейнеров используется `podman ps -a`: некоторые версии
+`podman-compose` не поддерживают флаг `-a` у своей команды `ps`.
+Список включает контейнеры других проектов текущего пользователя.
 
 `models-glm-ocr` со статусом **Exited (0)** — нормальное состояние. При ошибке
 этого контейнера сначала исправьте подготовку моделей; worker зависит от неё.
@@ -390,7 +394,7 @@ OCR_ALLOW_MODEL_DOWNLOAD=false podman compose --profile nemotron up -d --no-buil
 
 | Симптом | Что проверить |
 | --- | --- |
-| API доступен, задание постоянно `queued` | Запущен ли сервис именно выбранного backend; `/health` → `workers` и `compose ps -a` |
+| API доступен, задание постоянно `queued` | Запущен ли сервис именно выбранного backend; `/health` → `workers` и `podman ps -a` |
 | `models-*` завершился с ненулевым кодом | Его логи, доступ к источнику весов, свободный диск; в offline-режиме — импортирован ли правильный том |
 | `service_completed_successfully` не поддерживается | Обновите Compose provider; worker должен ждать успешной подготовки весов |
 | `Permission denied` на томе | Не смешаны ли `podman` и `sudo podman`, корректно ли импортированы владельцы файлов; не делайте `chmod 777` |
@@ -408,7 +412,7 @@ OCR_ALLOW_MODEL_DOWNLOAD=false podman compose --profile nemotron up -d --no-buil
 Логи конкретной модели:
 
 ```sh
-podman compose --profile nemotron ps -a
+podman ps -a
 podman compose --profile nemotron logs --tail=100 models-nemotron nemotron api
 ```
 

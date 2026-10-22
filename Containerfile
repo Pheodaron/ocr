@@ -27,6 +27,8 @@ ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     UV_LINK_MODE=copy \
     UV_COMPILE_BYTECODE=1 \
+    UV_SYSTEM_CERTS=true \
+    PYTHONPATH=/app/src \
     OCR_DATA_DIR=/data \
     OCR_MODELS_DIR=/models \
     PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK=True \
@@ -43,14 +45,20 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 COPY --from=uv /uv /usr/local/bin/uv
 WORKDIR /app
-COPY pyproject.toml uv.lock README.md ./
-COPY src ./src
-COPY THIRD_PARTY_NOTICES.md LICENSES ./licenses/
+COPY pyproject.toml uv.lock ./
 # Optional combined CA bundle for a build behind an organization/session proxy.
 # No session certificate is stored in the resulting image.
 RUN --mount=type=secret,id=proxy_ca --mount=type=cache,target=/root/.cache/uv \
     if [ -f /run/secrets/proxy_ca ]; then export SSL_CERT_FILE=/run/secrets/proxy_ca; fi; \
-    uv sync --frozen --no-dev --no-editable
+    uv sync --frozen --no-dev --no-install-project
+
+# Run the checked-in application directly: no isolated Hatchling build/download.
+# Keep source changes after dependency installation so its cache remains reusable.
+COPY src ./src
+COPY THIRD_PARTY_NOTICES.md LICENSES ./licenses/
+COPY --chmod=755 container/ocr-service /usr/local/bin/ocr-service
+# Source files may be checked out with a restrictive host umask.
+RUN chmod -R a+rX /app/src
 
 USER 10001:10001
 EXPOSE 8000
@@ -67,7 +75,7 @@ FROM base AS paddle
 USER root
 RUN --mount=type=secret,id=proxy_ca --mount=type=cache,target=/root/.cache/uv \
     if [ -f /run/secrets/proxy_ca ]; then export SSL_CERT_FILE=/run/secrets/proxy_ca; fi; \
-    uv sync --frozen --extra ocr --no-dev --no-editable
+    uv sync --frozen --extra ocr --no-dev --no-install-project
 USER 10001:10001
 CMD ["ocr-service", "worker"]
 
@@ -75,7 +83,7 @@ FROM base AS kdl
 USER root
 RUN --mount=type=secret,id=proxy_ca --mount=type=cache,target=/root/.cache/uv \
     if [ -f /run/secrets/proxy_ca ]; then export SSL_CERT_FILE=/run/secrets/proxy_ca; fi; \
-    uv sync --frozen --extra kdl --no-dev --no-editable
+    uv sync --frozen --extra kdl --no-dev --no-install-project
 USER 10001:10001
 CMD ["ocr-service", "worker"]
 
@@ -89,7 +97,7 @@ FROM base AS falcon
 USER root
 RUN --mount=type=secret,id=proxy_ca --mount=type=cache,target=/root/.cache/uv \
     if [ -f /run/secrets/proxy_ca ]; then export SSL_CERT_FILE=/run/secrets/proxy_ca; fi; \
-    uv sync --frozen --extra falcon --no-dev --no-editable
+    uv sync --frozen --extra falcon --no-dev --no-install-project
 USER 10001:10001
 CMD ["ocr-service", "worker"]
 
@@ -97,6 +105,6 @@ FROM base AS nemotron
 USER root
 RUN --mount=type=secret,id=proxy_ca --mount=type=cache,target=/root/.cache/uv \
     if [ -f /run/secrets/proxy_ca ]; then export SSL_CERT_FILE=/run/secrets/proxy_ca; fi; \
-    uv sync --frozen --extra nemotron --no-dev --no-editable
+    uv sync --frozen --extra nemotron --no-dev --no-install-project
 USER 10001:10001
 CMD ["ocr-service", "worker"]

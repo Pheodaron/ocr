@@ -78,6 +78,12 @@ Compose собирает CPU `llama-server` из
 commit `47a39665e7081dc482feec169961acc09750a5c4`.
 CUDA отключена при сборке; runtime передаёт `--n-gpu-layers 0`,
 `--no-mmproj-offload`, `--parallel 1`, `--offline`, `--fit off`.
+Для dots.mocr используется `--flash-attn auto`: llama.cpp выбирает доступный
+режим для decoder и vision encoder, включая CPU. Остальные GGUF backend
+сохраняют `--flash-attn off`. Запрошенный режим записывается в
+`engine.flash_attention`; это не подтверждение фактического включения.
+Фактический выбор vision encoder виден в журнале llama-server по строке
+`flash attention is enabled` или `disabled`. Ускорение требует замера на модели.
 HTTP-запрос передаёт локальный PNG как base64 data URL и затем промпт;
 `temperature=0`, `seed=42`, `cache_prompt=false`. У каждой страницы отдельный
 chat-контекст; страницы не добавляются в одну длинную беседу.

@@ -155,6 +155,9 @@ def test_local_multimodal_http_contract_and_cpu_server_lifecycle(settings, monke
         assert engine.metadata["max_input_pixels"] == expected_budget
         assert recorded["request"]["temperature"] == 0
         command = recorded["command"]
+        expected_flash_attention = "auto" if backend == "dots_mocr" else "off"
+        assert command[command.index("--flash-attn") + 1] == expected_flash_attention
+        assert engine.metadata["flash_attention"] == expected_flash_attention
         assert command[command.index("--n-gpu-layers") + 1] == "0"
         assert "--no-mmproj-offload" in command and "--offline" in command
     finally:

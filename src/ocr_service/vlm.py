@@ -62,7 +62,7 @@ def server_command(settings: Settings, backend: str, manifest: dict) -> list[str
         "--cache-type-v",
         "f16",
         "--flash-attn",
-        "off",
+        "auto" if backend == "dots_mocr" else "off",
         "--fit",
         "off",
         "--jinja",
@@ -145,6 +145,7 @@ class VLMEngine:
             "max_input_pixels": settings.vlm_image_budget(backend),
             "cache_type_k": settings.kv_cache_type,
             "cache_type_v": "f16",
+            "flash_attention": "auto" if backend == "dots_mocr" else "off",
             "task": settings.glm_task if backend == "glm_ocr" else "layout",
             "coordinates": "not normalized; generated dots boxes are retained only in raw output",
         }

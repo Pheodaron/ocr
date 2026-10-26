@@ -1,0 +1,19 @@
+[tools]
+python = "3.12"
+node = "24"
+uv = "0.12.23"
+
+[tasks.install]
+run = "uv sync --frozen && npm --prefix frontend ci"
+
+[tasks.dev]
+run = "uv run uvicorn train_app.main:app --host 127.0.0.1 --port 8001 --reload"
+
+[tasks.frontend]
+run = "npm --prefix frontend run dev"
+
+[tasks.check]
+run = "uv run ruff check . && uv run pytest && npm --prefix frontend run check && npm --prefix frontend run test && npm --prefix frontend run build"
+
+[tasks.up]
+run = "podman compose up -d --build app"

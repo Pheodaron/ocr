@@ -1,0 +1,16 @@
+.git
+.venv
+data
+models
+frontend/node_modules
+frontend/dist
+__pycache__
+.pytest_cache
+.ruff_cache
+.env
+tests
+docs
+scripts
+frontend/test-results
+frontend/playwright-report
+frontend/tsconfig.tsbuildinfo

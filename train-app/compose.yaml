@@ -1,0 +1,123 @@
+name: train-app
+
+x-offline: &offline
+  HF_HUB_OFFLINE: "1"
+  TRANSFORMERS_OFFLINE: "1"
+  HF_HUB_DISABLE_TELEMETRY: "1"
+  DO_NOT_TRACK: "1"
+  TOKENIZERS_PARALLELISM: "false"
+  OMP_NUM_THREADS: "8"
+  TRAIN_DATA_DIR: /data
+
+x-gpu: &gpu
+  devices:
+    - nvidia.com/gpu=all
+  security_opt:
+    - label=disable
+    - no-new-privileges:true
+  volumes:
+    - ./data:/data:z
+    - ./models:/models:ro,z
+  networks: [workbench]
+  stop_grace_period: 60s
+  shm_size: 1gb
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Containerfile
+    image: localhost/train-app:0.1.0
+    ports:
+      - "127.0.0.1:${TRAIN_PORT:-8001}:8001"
+    environment:
+      <<: *offline
+      TRAIN_LIGHTON_URL: http://lighton4b:8090
+      TRAIN_QWEN_URL: http://qwen:8080
+      TRAIN_TRAINER_URL: http://trainer:8090
+      TRAIN_QWEN_MODEL: qwen-ocr
+      TRAIN_ALLOWED_ORIGINS: "http://127.0.0.1:${TRAIN_PORT:-8001},http://localhost:${TRAIN_PORT:-8001}"
+    volumes:
+      - ./data:/data:z
+    networks: [workbench]
+    security_opt: [no-new-privileges:true]
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/health', timeout=3)"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+    restart: unless-stopped
+
+  lighton4b:
+    <<: *gpu
+    profiles: [lighton4b]
+    build:
+      context: .
+      dockerfile: Containerfile.gpu
+    image: localhost/train-compute:0.1.0
+    environment:
+      <<: *offline
+      TRAIN_COMPUTE_ROLE: lighton4b
+      TRAIN_TEACHER_PATH: /models/lighton4b
+    healthcheck:
+      test: [CMD, python3, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8090/status', timeout=3)"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+
+  qwen:
+    <<: *gpu
+    profiles: [qwen]
+    build:
+      context: .
+      dockerfile: Containerfile.llama
+    image: localhost/train-qwen:0.1.0
+    environment:
+      <<: *offline
+      LD_LIBRARY_PATH: /opt/llama/bin:/usr/local/nvidia/lib:/usr/local/nvidia/lib64:/usr/local/cuda/lib64
+    command:
+      - --model
+      - /models/qwen/Qwen3.8-27B-UD-Q3_K_XL.gguf
+      - --mmproj
+      - /models/qwen/mmproj-F16.gguf
+      - --alias
+      - qwen-ocr
+      - --gpu-layers
+      - all
+      - --mmproj-offload
+      - --kv-offload
+      - --fit
+      - "off"
+      - --ctx-size
+      - "${QWEN_CONTEXT:-8192}"
+      - --parallel
+      - "1"
+      - --flash-attn
+      - "on"
+      - --slots
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8080"
+    healthcheck:
+      test: [CMD, curl, -fsS, http://127.0.0.1:8080/health]
+      interval: 20s
+      timeout: 5s
+      retries: 3
+      start_period: 3m
+
+  trainer:
+    <<: *gpu
+    profiles: [trainer]
+    build:
+      context: .
+      dockerfile: Containerfile.gpu
+    image: localhost/train-compute:0.1.0
+    environment:
+      <<: *offline
+      TRAIN_COMPUTE_ROLE: trainer
+      TRAIN_STUDENT_PATH: /models/lighton08
+
+networks:
+  workbench:
+    internal: true

@@ -1,0 +1,20 @@
+# syntax=docker/dockerfile:1
+FROM nvidia/cuda:12.8.1-devel-ubuntu24.04 AS build
+ARG LLAMA_CPP_REF=fa6769818708afd9807b22183ccda112fd563427
+RUN apt-get update && apt-get install -y --no-install-recommends git cmake ninja-build g++ libcurl4-openssl-dev ca-certificates && rm -rf /var/lib/apt/lists/*
+RUN --mount=type=secret,id=proxy_ca \
+    if [ -f /run/secrets/proxy_ca ]; then export GIT_SSL_CAINFO=/run/secrets/proxy_ca; fi; \
+    git init /source && cd /source && git remote add origin https://github.com/ggml-org/llama.cpp.git && \
+    git fetch --depth 1 origin "$LLAMA_CPP_REF" && git checkout --detach FETCH_HEAD
+RUN cmake -S /source -B /source/build -G Ninja \
+    -DCMAKE_BUILD_TYPE=Release -DGGML_CUDA=ON -DGGML_NATIVE=OFF \
+    -DCMAKE_CUDA_ARCHITECTURES=120 -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_EXAMPLES=OFF \
+    -DLLAMA_BUILD_SERVER=ON && cmake --build /source/build --target llama-server -j 4
+
+FROM nvidia/cuda:12.8.1-runtime-ubuntu24.04
+RUN apt-get update && apt-get install -y --no-install-recommends libcurl4t64 libgomp1 util-linux curl ca-certificates && rm -rf /var/lib/apt/lists/*
+COPY --from=build /source/build/bin/ /opt/llama/bin/
+COPY container/qwen-entrypoint.sh /usr/local/bin/qwen-entrypoint
+ENV LD_LIBRARY_PATH=/opt/llama/bin:/usr/local/nvidia/lib:/usr/local/nvidia/lib64:/usr/local/cuda/lib64
+EXPOSE 8080
+ENTRYPOINT ["/usr/local/bin/qwen-entrypoint"]

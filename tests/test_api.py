@@ -1,7 +1,10 @@
+import hashlib
 import json
 from datetime import UTC, datetime, timedelta
+from urllib.parse import parse_qs, urlsplit
 
 import pymupdf
+from lxml import html
 
 from ocr_service.schemas import PageResult
 
@@ -95,3 +98,26 @@ def test_local_client_and_docs_do_not_need_external_assets(client):
         assert "cdn.jsdelivr" not in response.text
     assert client.get("/api/documents/not-an-id").status_code == 422
     assert client.get("/api/documents/" + "a" * 32).status_code == 404
+
+
+def test_ui_loads_matching_versioned_assets_and_does_not_cache_pages(client):
+    versions = {}
+    for path in ("/", "/docs"):
+        response = client.get(path)
+        assert response.headers["cache-control"] == "no-store"
+        root = html.fromstring(response.text)
+        urls = root.xpath('//script/@src | //link[@rel="stylesheet"]/@href')
+        assert urls
+        for url in urls:
+            parsed = urlsplit(url)
+            assert parsed.path in {"/static/app.js", "/static/style.css"}
+            version = parse_qs(parsed.query)["v"][0]
+            asset = client.get(url)
+            assert asset.status_code == 200
+            assert asset.headers["cache-control"] == "no-store"
+            assert version == hashlib.sha256(asset.content).hexdigest()[:16]
+            assert versions.setdefault(parsed.path, version) == version
+    assert set(versions) == {"/static/app.js", "/static/style.css"}
+    # Unversioned requests from old pages must also stop populating stale caches.
+    for path in versions:
+        assert client.get(path).headers["cache-control"] == "no-store"

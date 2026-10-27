@@ -87,6 +87,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "default-src 'self'; script-src 'self'; style-src 'self'; "
             "img-src 'self'; connect-src 'self'; frame-ancestors 'none'; object-src 'none'"
         )
+        if request.url.path in {"/", "/docs"} or request.url.path.startswith("/static/"):
+            response.headers["Cache-Control"] = "no-store"
         return response
 
     def require_job(job_id: str) -> dict:
@@ -427,12 +429,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     static = Path(__file__).with_name("static")
     app.mount("/static", StaticFiles(directory=static), name="static")
 
+    def ui_page(filename: str) -> HTMLResponse:
+        content = (static / filename).read_text(encoding="utf-8")
+        for asset in ("app.js", "style.css"):
+            version = hashlib.sha256((static / asset).read_bytes()).hexdigest()[:16]
+            content = content.replace(f'"/static/{asset}"', f'"/static/{asset}?v={version}"')
+        return HTMLResponse(content)
+
     @app.get("/", response_class=HTMLResponse, include_in_schema=False)
     def index():
-        return HTMLResponse((static / "index.html").read_text())
+        return ui_page("index.html")
 
     @app.get("/docs", response_class=HTMLResponse, include_in_schema=False)
     def api_docs():
-        return HTMLResponse((static / "api.html").read_text())
+        return ui_page("api.html")
 
     return app

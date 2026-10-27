@@ -1,6 +1,9 @@
+import fcntl
 import re
+import time
 from pathlib import Path
 
+import pytest
 import yaml
 from fastapi.testclient import TestClient
 
@@ -8,6 +11,173 @@ from ocr_service.api import create_app
 from ocr_service.catalog import LABELS
 from ocr_service.config import Settings
 from ocr_service.schemas import PageResult
+
+
+@pytest.mark.parametrize("completed", [False, True])
+def test_delete_run_removes_its_documents_and_files_but_preserves_other_runs(
+    client, settings, pdf_bytes, completed
+):
+    run = client.post(
+        "/api/runs",
+        json={
+            "backend": "paddle",
+            "filenames": ["first.pdf", "bad.pdf", "last.pdf"],
+        },
+    ).json()
+    ids = []
+    for position in (0, 2):
+        ids.append(
+            client.post(
+                "/api/documents",
+                files={"file": ("document.pdf", pdf_bytes)},
+                data={
+                    "backend": "paddle",
+                    "run_id": run["id"],
+                    "file_index": position,
+                },
+            ).json()["id"]
+        )
+    client.post(
+        f"/api/runs/{run['id']}/finish-upload",
+        json={
+            "failures": [
+                {"position": 1, "error": "Invalid PDF"},
+            ]
+        },
+    )
+    db = client.app.state.db
+    if completed:
+        for job_id in ids:
+            assert db.claim_job()["id"] == job_id
+            for number in range(1, 4):
+                db.save_page(job_id, PageResult(number=number, text="Saved result"))
+            db.finish_job(job_id)
+    other = client.post("/api/documents", files={"file": ("keep.pdf", pdf_bytes)}).json()
+    settings.models_dir.mkdir(parents=True)
+    weight = settings.models_dir / "weights.fixture"
+    weight.write_bytes(b"preserved weights")
+    response = client.delete(f"/api/runs/{run['id']}")
+    assert response.status_code == 200
+    assert response.json()["status"] == "deleted"
+    for job_id in ids:
+        assert db.get_job(job_id) is None
+        assert not (settings.data_dir / "documents" / job_id).exists()
+    assert client.get(f"/api/runs/{run['id']}").status_code == 404
+    assert client.get(f"/api/runs/{run['id']}/report").status_code == 404
+    assert client.delete(f"/api/runs/{run['id']}").status_code == 404
+    assert client.get(f"/api/documents/{other['id']}").status_code == 200
+    assert (settings.data_dir / "documents" / other["id"] / "source.pdf").read_bytes() == pdf_bytes
+    assert weight.read_bytes() == b"preserved weights"
+    db.initialize()
+    assert len(client.get("/api/runs").json()["runs"]) == 1
+
+
+def test_delete_run_with_no_accepted_files(client):
+    run = client.post("/api/runs", json={"backend": "paddle", "filenames": ["bad.pdf"]}).json()
+    response = client.delete(f"/api/runs/{run['id']}")
+    assert response.status_code == 200
+    assert client.get("/api/runs").json()["runs"] == []
+
+
+def test_concurrent_file_removal_does_not_leave_an_orphan_directory(
+    client, settings, pdf_bytes, monkeypatch
+):
+    from ocr_service import lifecycle
+
+    job = client.post("/api/documents", files={"file": ("test.pdf", pdf_bytes)}).json()
+    run_id = client.get("/api/runs").json()["runs"][0]["id"]
+    directory = settings.data_dir / "documents" / job["id"]
+    (directory / "race.raw.json").write_text("{}")
+    (directory / "remaining.raw.json").write_text("{}")
+    original = lifecycle.os.unlink
+
+    def unlinked_by_another_deleter(path, *args, **kwargs):
+        original(path, *args, **kwargs)
+        if path == "race.raw.json":
+            raise FileNotFoundError("Another cleanup already unlinked this entry")
+
+    monkeypatch.setattr(lifecycle.os, "unlink", unlinked_by_another_deleter)
+    assert client.delete(f"/api/runs/{run_id}").status_code == 200
+    assert not directory.exists()
+    assert client.app.state.db.get_job(job["id"]) is None
+
+
+def test_upload_cannot_attach_a_new_document_after_run_deletion(
+    client, pdf_bytes, settings, monkeypatch
+):
+    from ocr_service import api
+
+    run = client.post("/api/runs", json={"backend": "paddle", "filenames": ["late.pdf"]}).json()
+    original = api.validate_pdf
+
+    def deleted_during_upload(path, max_pages):
+        client.app.state.db.request_run_delete(run["id"])
+        return original(path, max_pages)
+
+    monkeypatch.setattr(api, "validate_pdf", deleted_during_upload)
+    response = client.post(
+        "/api/documents",
+        files={"file": ("late.pdf", pdf_bytes)},
+        data={
+            "backend": "paddle",
+            "run_id": run["id"],
+            "file_index": 0,
+        },
+    )
+    assert response.status_code == 409
+    assert client.get("/api/documents").json() == []
+    assert client.get("/api/runs").json()["runs"] == []
+    assert not list((settings.data_dir / "documents").iterdir())
+
+
+def test_pending_run_deletion_survives_restart_and_finishes_after_writer_stops(
+    client, settings, pdf_bytes
+):
+    run = client.post("/api/runs", json={"backend": "paddle", "filenames": ["active.pdf"]}).json()
+    job = client.post(
+        "/api/documents",
+        files={"file": ("active.pdf", pdf_bytes)},
+        data={
+            "backend": "paddle",
+            "run_id": run["id"],
+            "file_index": 0,
+        },
+    ).json()
+    db = client.app.state.db
+    db.claim_job()
+    db.start_page(job["id"], 1)
+    directory = settings.data_dir / "documents" / job["id"]
+    with (settings.data_dir / "worker-paddle.lock").open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        response = client.delete(f"/api/runs/{run['id']}")
+        assert response.status_code == 202
+        assert response.json()["status"] == "deleting"
+        assert db.get_job(job["id"])["delete_requested"]
+        assert directory.exists()
+        assert client.delete(f"/api/runs/{run['id']}").status_code == 202
+        with TestClient(create_app(settings)) as restarted:
+            assert restarted.get("/api/runs").json()["runs"] == []
+            assert restarted.get(f"/api/documents/{job['id']}").status_code == 404
+            assert db.claim_job() is None
+            assert directory.exists()
+    deadline = time.monotonic() + 6
+    while db.get_job(job["id"]) is not None and time.monotonic() < deadline:
+        time.sleep(0.05)
+    assert db.get_job(job["id"]) is None
+    assert not directory.exists()
+    assert not db.run_deletion_pending(run["id"])
+
+
+def test_existing_runs_gain_deletion_flag_without_losing_documents(client, pdf_bytes):
+    job = client.post("/api/documents", files={"file": ("existing.pdf", pdf_bytes)}).json()
+    db = client.app.state.db
+    run_id = client.get("/api/runs").json()["runs"][0]["id"]
+    with db.connect() as connection:
+        connection.execute("DROP INDEX runs_deletions")
+        connection.execute("ALTER TABLE runs DROP COLUMN delete_requested")
+    db.initialize()
+    assert client.get(f"/api/runs/{run_id}").json()["files"][0]["job_id"] == job["id"]
+    assert client.delete(f"/api/runs/{run_id}").status_code == 200
 
 
 def test_runs_preserve_groups_failures_reports_and_deleted_documents(client, settings, pdf_bytes):

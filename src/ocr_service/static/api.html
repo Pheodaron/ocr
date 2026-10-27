@@ -8,6 +8,7 @@
 <tr><td>POST</td><td>/api/runs</td><td>JSON: backend, filenames (1–1000 имён). Создать запуск перед загрузкой файлов; ответ 201 с ID и составом.</td></tr>
 <tr><td>GET</td><td>/api/runs?limit=20&amp;offset=0</td><td>Список запусков со статусами и признаком has_more. limit: 1–100.</td></tr>
 <tr><td>GET</td><td>/api/runs/{id}</td><td>Документы запуска: принятые задания, ошибки, ещё не загруженные и удалённые файлы.</td></tr>
+<tr><td>DELETE</td><td>/api/runs/{id}</td><td>Удалить запуск вместе с исходными PDF и результатами. Ответ 200: deleted или 202: deleting. Активные задания останавливаются; запуск сразу скрывается. Очистка продолжается после перезапуска, новые файлы в удаляемый запуск не принимаются.</td></tr>
 <tr><td>POST</td><td>/api/runs/{id}/finish-upload</td><td>JSON: failures [{position,error}]. Сохранить ошибки и завершить загрузку запуска.</td></tr>
 <tr><td>GET</td><td>/api/runs/{id}/report?format=html|json</td><td>Скачать отчёт только этого запуска, включая ошибки загрузки и удалённые документы.</td></tr>
 <tr><td>POST</td><td>/api/comparisons</td><td>file и повторяемое поле backends. Ответ 202: ID сравнения и задания всех конфигураций.</td></tr>

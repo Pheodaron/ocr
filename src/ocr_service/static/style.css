@@ -26,6 +26,9 @@
 .run-card[open] > summary .run-chevron { transform: rotate(90deg); }
 .run-body { border-top: 1px solid #e2e7ee; padding: 0 16px 16px; }
 .run-body .downloads { gap: 10px; margin-bottom: 10px; }
+.run-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin: 16px 0; }
+.run-toolbar h3 { margin: 0; }
+.run-delete { padding: 8px 12px; font-size: .85rem; background: #fce7e7; color: #9b3131; }
 .document-link { border: 0; background: transparent; color: #244fd1; padding: 0; text-align: left; overflow-wrap: anywhere; text-decoration: underline; }
 .document-link:focus-visible, .run-heading:focus-visible { outline: 2px solid #244fd1; outline-offset: 3px; }
 body.modal-open { overflow: hidden; }

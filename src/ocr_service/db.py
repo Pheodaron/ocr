@@ -72,7 +72,8 @@ class Database:
                 CREATE TABLE IF NOT EXISTS runs (
                     id TEXT PRIMARY KEY,
                     backend TEXT NOT NULL,
-                    created_at TEXT NOT NULL
+                    created_at TEXT NOT NULL,
+                    delete_requested INTEGER NOT NULL DEFAULT 0
                 );
                 CREATE TABLE IF NOT EXISTS run_files (
                     run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
@@ -99,16 +100,22 @@ class Database:
                 if name not in columns:
                     db.execute(f"ALTER TABLE jobs ADD COLUMN {name} {definition}")
             db.execute("CREATE INDEX IF NOT EXISTS jobs_comparison ON jobs(comparison_id)")
+            run_columns = {row["name"] for row in db.execute("PRAGMA table_info(runs)")}
+            if "delete_requested" not in run_columns:
+                db.execute(
+                    "ALTER TABLE runs ADD COLUMN delete_requested INTEGER NOT NULL DEFAULT 0"
+                )
+            db.execute("CREATE INDEX IF NOT EXISTS runs_deletions ON runs(delete_requested)")
             # Earlier versions did not save upload groups. Preserve standalone jobs
             # and the comparison groups that can be recovered without guessing.
             legacy = db.execute(
-                "SELECT j.* FROM jobs j WHERE NOT EXISTS "
+                "SELECT j.* FROM jobs j WHERE j.delete_requested=0 AND NOT EXISTS "
                 "(SELECT 1 FROM run_files f WHERE f.job_id=j.id) ORDER BY j.created_at,j.id"
             ).fetchall()
             for job in legacy:
                 run_id = job["comparison_id"] or job["id"]
                 db.execute(
-                    "INSERT OR IGNORE INTO runs VALUES (?,?,?)",
+                    "INSERT OR IGNORE INTO runs(id,backend,created_at) VALUES (?,?,?)",
                     (
                         run_id,
                         "comparison" if job["comparison_id"] else job["backend"],
@@ -122,6 +129,7 @@ class Database:
                     "INSERT INTO run_files VALUES (?,?,?,?,'accepted',NULL)",
                     (run_id, position, job["filename"], job["id"]),
                 )
+            self._purge_deleted_runs(db)
 
     def create_job(
         self,
@@ -155,7 +163,7 @@ class Database:
             if implicit:
                 backends = {job["backend"] for job in implicit}
                 db.execute(
-                    "INSERT INTO runs VALUES (?,?,?)",
+                    "INSERT INTO runs(id,backend,created_at) VALUES (?,?,?)",
                     (
                         run_id,
                         next(iter(backends)) if len(backends) == 1 else "comparison",
@@ -187,7 +195,9 @@ class Database:
                 if job.get("run_id"):
                     updated = db.execute(
                         "UPDATE run_files SET job_id=?,status='accepted',error=NULL "
-                        "WHERE run_id=? AND position=? AND job_id IS NULL AND status!='accepted'",
+                        "WHERE run_id=? AND position=? AND job_id IS NULL AND status!='accepted' "
+                        "AND EXISTS (SELECT 1 FROM runs "
+                        "WHERE id=run_files.run_id AND delete_requested=0)",
                         (job["id"], job["run_id"], job["file_index"]),
                     )
                     if updated.rowcount != 1:
@@ -201,7 +211,9 @@ class Database:
     def create_run(self, backend: str, filenames: list[str]) -> str:
         run_id = uuid4().hex
         with self.connect() as db:
-            db.execute("INSERT INTO runs VALUES (?,?,?)", (run_id, backend, now()))
+            db.execute(
+                "INSERT INTO runs(id,backend,created_at) VALUES (?,?,?)", (run_id, backend, now())
+            )
             db.executemany(
                 "INSERT INTO run_files(run_id,position,filename) VALUES (?,?,?)",
                 [(run_id, index, filename) for index, filename in enumerate(filenames)],
@@ -212,7 +224,7 @@ class Database:
         with self.connect() as db:
             row = db.execute(
                 "SELECT f.*,r.backend FROM run_files f JOIN runs r ON r.id=f.run_id "
-                "WHERE f.run_id=? AND f.position=?",
+                "WHERE f.run_id=? AND f.position=? AND r.delete_requested=0",
                 (run_id, position),
             ).fetchone()
             return dict(row) if row else None
@@ -245,6 +257,7 @@ class Database:
                 "SUM(j.status IN ('processing','cancelling')) AS processing,"
                 "SUM(j.status='queued') AS queued "
                 "FROM runs r JOIN run_files f ON f.run_id=r.id LEFT JOIN jobs j ON j.id=f.job_id "
+                "WHERE r.delete_requested=0 "
                 "GROUP BY r.id ORDER BY r.created_at DESC,r.id DESC LIMIT ? OFFSET ?",
                 (limit + 1, offset),
             ).fetchall()
@@ -271,7 +284,9 @@ class Database:
 
     def run_details(self, run_id: str) -> dict | None:
         with self.connect() as db:
-            run = db.execute("SELECT * FROM runs WHERE id=?", (run_id,)).fetchone()
+            run = db.execute(
+                "SELECT * FROM runs WHERE id=? AND delete_requested=0", (run_id,)
+            ).fetchone()
             if run is None:
                 return None
             rows = db.execute(
@@ -292,6 +307,55 @@ class Database:
                 item.update(status="deleted", error="Документ удалён")
             files.append(item)
         return {**dict(run), "files": files}
+
+    @staticmethod
+    def _purge_deleted_runs(db) -> None:
+        db.execute(
+            "DELETE FROM runs WHERE delete_requested=1 AND NOT EXISTS "
+            "(SELECT 1 FROM run_files WHERE run_id=runs.id AND job_id IS NOT NULL)"
+        )
+
+    def purge_deleted_runs(self) -> None:
+        with self.connect() as db:
+            self._purge_deleted_runs(db)
+
+    def request_run_delete(self, run_id: str) -> list[str]:
+        with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            if db.execute("SELECT 1 FROM runs WHERE id=?", (run_id,)).fetchone() is None:
+                raise KeyError(run_id)
+            db.execute("UPDATE runs SET delete_requested=1 WHERE id=?", (run_id,))
+            jobs = db.execute(
+                "SELECT job_id FROM run_files WHERE run_id=? AND job_id IS NOT NULL", (run_id,)
+            ).fetchall()
+            # Mark the entire group in one transaction: a worker cannot claim its next file.
+            db.execute(
+                "UPDATE jobs SET delete_requested=1,updated_at=?,status=CASE "
+                "WHEN status IN ('queued','processing') THEN 'cancelling' ELSE status END "
+                "WHERE id IN (SELECT job_id FROM run_files WHERE run_id=?)",
+                (now(), run_id),
+            )
+            self._purge_deleted_runs(db)
+            return [row["job_id"] for row in jobs]
+
+    def pending_run_deletions(self) -> list[str]:
+        with self.connect() as db:
+            return [
+                row["job_id"]
+                for row in db.execute(
+                    "SELECT f.job_id FROM runs r JOIN run_files f ON f.run_id=r.id "
+                    "WHERE r.delete_requested=1 AND f.job_id IS NOT NULL"
+                )
+            ]
+
+    def run_deletion_pending(self, run_id: str) -> bool:
+        with self.connect() as db:
+            return (
+                db.execute(
+                    "SELECT 1 FROM runs WHERE id=? AND delete_requested=1", (run_id,)
+                ).fetchone()
+                is not None
+            )
 
     def get_job(self, job_id: str) -> dict | None:
         with self.connect() as db:
@@ -348,6 +412,7 @@ class Database:
     def delete_job(self, job_id: str) -> None:
         with self.connect() as db:
             db.execute("DELETE FROM jobs WHERE id=?", (job_id,))
+            self._purge_deleted_runs(db)
 
     def request_cancel(self, job_id: str, *, delete: bool = False) -> None:
         # Serialize with claim/finish: a queued job must never start after this request.

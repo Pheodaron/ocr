@@ -221,6 +221,49 @@ def test_stop_real_process_and_descendant_frees_queue(
         assert not directory.exists()
 
 
+def test_run_deletion_stops_real_child_and_preserves_the_next_run(
+    client, pdf_bytes, settings, lifecycle_worker
+):
+    run = client.post(
+        "/api/runs",
+        json={
+            "backend": "paddle",
+            "filenames": ["long.pdf", "queued.pdf"],
+        },
+    ).json()
+    jobs = []
+    for index, name in enumerate(("long.pdf", "queued.pdf")):
+        jobs.append(
+            client.post(
+                "/api/documents",
+                files={"file": (name, pdf_bytes)},
+                data={
+                    "backend": "paddle",
+                    "run_id": run["id"],
+                    "file_index": index,
+                },
+            ).json()
+        )
+    other = upload(client, pdf_bytes, "next.pdf")
+    db = client.app.state.db
+    lifecycle_worker()
+    marker = settings.data_dir / "documents" / jobs[0]["id"] / "started.json"
+    wait_for(marker.exists)
+    processes = json.loads(marker.read_text())
+    response = client.delete(f"/api/runs/{run['id']}")
+    assert response.status_code in {200, 202}
+    assert client.get(f"/api/runs/{run['id']}").status_code == 404
+    wait_for(lambda: db.get_job(other["id"])["status"] == "completed")
+    wait_for(lambda: process_dead(processes["pid"]))
+    for pid in processes["children"]:
+        wait_for(lambda pid=pid: process_dead(pid))
+    for job in jobs:
+        assert db.get_job(job["id"]) is None
+        assert not (settings.data_dir / "documents" / job["id"]).exists()
+    assert not db.run_deletion_pending(run["id"])
+    assert client.get(f"/api/documents/{other['id']}/result").status_code == 200
+
+
 def test_stop_request_survives_recovery_and_is_finalized_on_worker_start(
     client, pdf_bytes, settings, lifecycle_worker
 ):

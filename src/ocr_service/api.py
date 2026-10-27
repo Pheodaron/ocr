@@ -1,5 +1,7 @@
+import asyncio
 import hashlib
 import json
+import logging
 import os
 import shutil
 from contextlib import asynccontextmanager
@@ -57,7 +59,25 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def lifespan(_app):
         settings.setup()
         db.initialize()
-        yield
+        stopped = asyncio.Event()
+
+        async def cleanup_runs():
+            while not stopped.is_set():
+                try:
+                    await run_in_threadpool(finalize_deleted_runs, None)
+                except Exception:
+                    logging.exception("Could not finish run deletion; will retry")
+                try:
+                    await asyncio.wait_for(stopped.wait(), timeout=2)
+                except TimeoutError:
+                    pass
+
+        cleanup = asyncio.create_task(cleanup_runs())
+        try:
+            yield
+        finally:
+            stopped.set()
+            await cleanup
 
     app = FastAPI(
         title="Document OCR",
@@ -219,7 +239,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "file_index": file_index,
             }
             if comparison_id is None:
-                db.create_jobs([record])
+                try:
+                    db.create_jobs([record])
+                except ValueError as error:
+                    raise HTTPException(409, str(error)) from error
         except BaseException:
             shutil.rmtree(directory, ignore_errors=True)
             raise
@@ -289,6 +312,28 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/api/runs/{run_id}")
     def get_run(run_id: JobId):
         return require_run(run_id)
+
+    def finalize_deleted_runs(job_ids: list[str] | None) -> None:
+        for job_id in job_ids if job_ids is not None else db.pending_run_deletions():
+            try:
+                db.finalize_unclaimed_cancel(job_id)
+                finalize_if_worker_absent(db, settings, job_id)
+            except OSError:
+                logging.exception("Could not delete run document %s; will retry", job_id)
+        db.purge_deleted_runs()
+
+    @app.delete("/api/runs/{run_id}")
+    def delete_run(run_id: JobId):
+        try:
+            jobs = db.request_run_delete(run_id)
+        except KeyError as error:
+            raise HTTPException(404, "Запуск не найден") from error
+        finalize_deleted_runs(jobs)
+        pending = db.run_deletion_pending(run_id)
+        return JSONResponse(
+            {"id": run_id, "status": "deleting" if pending else "deleted"},
+            status_code=202 if pending else 200,
+        )
 
     @app.post("/api/runs/{run_id}/finish-upload")
     def finish_upload(run_id: JobId, selection: RunFinish):

@@ -14,6 +14,8 @@ let backendSelectionChosen = false;
 let uploading = false;
 let reportDownloading = false;
 const runViews = new Map();
+const pendingRunActions = new Set();
+const deletedRunIds = new Set();
 let runsVisible = 20;
 let runsRefreshing = false;
 let runsRefreshPending = false;
@@ -27,7 +29,8 @@ function saveOpenRuns() {
 
 function updateReportButtons() {
   for (const [id, view] of runViews) {
-    for (const button of view.reportButtons) button.disabled = reportDownloading || id === uploadingRunId || !view.data;
+    for (const button of view.reportButtons) button.disabled = reportDownloading || pendingRunActions.has(id) || id === uploadingRunId || !view.data;
+    view.deleteButton.disabled = pendingRunActions.has(id);
   }
   $("document-report").disabled = reportDownloading;
 }
@@ -53,9 +56,13 @@ function createRunView(id) {
     button.addEventListener("click", () => downloadReport([], format, message, [], id));
     reports.append(button); return button;
   });
-  body.append(node("h3", "Пакет документов"), progress, scroll, reports, message);
+  const toolbar = node("div", undefined, "run-toolbar");
+  const deleteButton = node("button", "Удалить запуск", "run-delete"); deleteButton.type = "button";
+  deleteButton.addEventListener("click", () => deleteRun(id));
+  toolbar.append(node("h3", "Пакет документов"), deleteButton);
+  body.append(toolbar, progress, scroll, reports, message);
   element.append(summary, body);
-  const view = {element, title, subtitle, state, body, progress, rows, message, reportButtons, rowViews:new Map(), data:null, loading:false};
+  const view = {element, title, subtitle, state, body, progress, rows, message, reportButtons, deleteButton, rowViews:new Map(), data:null, loading:false};
   runViews.set(id, view);
   element.open = openRuns.has(id);
   element.addEventListener("toggle", () => {
@@ -64,6 +71,32 @@ function createRunView(id) {
     saveOpenRuns();
   });
   return view;
+}
+
+async function deleteRun(id) {
+  const view = runViews.get(id);
+  if (!view || pendingRunActions.has(id)) return;
+  if (!window.confirm(`Удалить ${view.title.textContent.toLowerCase()} и все его документы? Исходные PDF и результаты будут удалены, активная обработка — остановлена.`)) return;
+  pendingRunActions.add(id); deletedRunIds.add(id);
+  view.deleteButton.textContent = "Удаляется…"; updateReportButtons();
+  view.message.textContent = "Остановка обработки и удаление запуска…";
+  try {
+    let response;
+    try { response = await request(`/api/runs/${id}`, {method:"DELETE"}); }
+    catch (error) { if (error.status !== 404) throw error; }
+    if (view.data?.files.some((file) => file.job_id === selectedId)) $("document-dialog").close();
+    view.element.remove(); runViews.delete(id); openRuns.delete(id); saveOpenRuns();
+    $("message").textContent = response?.status === "deleting"
+      ? "Запуск удаляется вместе с документами и результатами."
+      : "Запуск удалён вместе с документами и результатами.";
+  } catch (error) {
+    deletedRunIds.delete(id);
+    view.message.textContent = `Не удалось удалить запуск: ${error.message}`;
+    $("message").textContent = view.message.textContent;
+  } finally {
+    pendingRunActions.delete(id); view.deleteButton.textContent = "Удалить запуск";
+    updateReportButtons(); await refreshRuns();
+  }
 }
 
 function updateRunDetails(view, data) {
@@ -129,7 +162,7 @@ async function refreshRuns() {
   try {
     const pages = [];
     for (let offset = 0; offset < runsVisible; offset += 100) pages.push(request(`/api/runs?limit=${Math.min(100, runsVisible - offset)}&offset=${offset}`));
-    const responses = await Promise.all(pages), runs = responses.flatMap((page) => page.runs);
+    const responses = await Promise.all(pages), runs = responses.flatMap((page) => page.runs).filter((run) => !deletedRunIds.has(run.id));
     const ids = new Set(runs.map((run) => run.id));
     for (const [id, view] of runViews) if (!ids.has(id)) { view.element.remove(); runViews.delete(id); }
     let previous = null;
@@ -434,6 +467,7 @@ $("upload-form").addEventListener("submit", async (event) => {
     runId = run.id; uploadingRunId = runId; openRuns.add(runId); saveOpenRuns();
     await refreshRuns();
     for (const [index, file] of files.entries()) {
+      if (deletedRunIds.has(runId)) break;
       $("message").textContent = `Загрузка ${index + 1} из ${files.length}: ${file.name}`;
       try {
         if (file.size > maxUploadMb * 1024 * 1024) throw new Error(`Лимит файла: ${maxUploadMb} МБ`);
@@ -445,11 +479,11 @@ $("upload-form").addEventListener("submit", async (event) => {
         await loadRunDetails(runId); lastDetailsUpdate = performance.now();
       }
     }
-    $("message").textContent = `Принято документов: ${accepted} из ${files.length}.`
+    if (!deletedRunIds.has(runId)) $("message").textContent = `Принято документов: ${accepted} из ${files.length}.`
       + (accepted ? " Обработка продолжится на сервере, даже если закрыть страницу." : " Проверьте ошибки в запуске.");
   } catch (error) { $("message").textContent = error.message; }
   finally {
-    if (runId) {
+    if (runId && !deletedRunIds.has(runId)) {
       try {
         await request(`/api/runs/${runId}/finish-upload`, {
           method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({failures}),

@@ -11,6 +11,13 @@ from .db import Database
 from .schemas import TERMINAL_STATUSES
 
 
+def ignore_missing_during_cleanup(_function, _path, error) -> None:
+    # A worker and the API may finish the same deletion concurrently. Continue
+    # with the remaining files instead of abandoning a partially removed directory.
+    if not isinstance(error, FileNotFoundError):
+        raise error
+
+
 def arm_parent_death_signal(parent: int) -> None:
     # Run in the new Python interpreter, not preexec_fn in a multithreaded worker.
     ctypes.CDLL(None).prctl(1, signal.SIGKILL)
@@ -25,7 +32,7 @@ def finalize_control(db: Database, settings: Settings, job_id: str) -> None:
     if job and job["delete_requested"]:
         directory = settings.data_dir / "documents" / job_id
         try:
-            shutil.rmtree(directory)
+            shutil.rmtree(directory, onexc=ignore_missing_during_cleanup)
         except FileNotFoundError:
             pass
         db.delete_job(job_id)

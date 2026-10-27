@@ -4,7 +4,7 @@ import html
 import json
 from datetime import UTC, datetime
 
-from .catalog import LABELS, VLM_BACKENDS
+from .catalog import VLM_BACKENDS, backend_label
 from .schemas import TERMINAL_STATUSES, DocumentResult
 
 STATUS = {
@@ -55,20 +55,6 @@ def pipeline_description(backend: str) -> list[str]:
             "указаны в метаданных. "
             "Проверка качества не запускает повтор с повышенным DPI.",
         ]
-    elif backend == "kdl":
-        common += [
-            "KDL на CPU/FP32: изображение 1036×1036 для Layout Detection; области вырезаются из "
-            "исходного рендера, при необходимости поворачиваются и отдельно распознаются. "
-            "Обрабатываются текст, таблицы OTSL, формулы и изображения; размер каждого входа "
-            "ограничен kdl_max_pixels. Итог объединяется в порядке областей.",
-        ]
-    elif backend == "falcon":
-        common += [
-            "Falcon на CPU/FP32: BGR преобразуется в PIL RGB; штатный generate получает "
-            "max_dimension=1024, category=plain, temperature=0, seed=42, compile=false. "
-            "Предобработка внутри generate входит в общее время инференса; "
-            "отдельно она не измеряется.",
-        ]
     else:
         common += [
             "Исторический провайдер: точный алгоритм определяется сохранёнными метаданными движка."
@@ -112,7 +98,7 @@ def processing_report(results: list[DocumentResult]) -> dict:
         documents.append(
             {
                 "document": document,
-                "provider": LABELS.get(result.document.backend, result.document.backend),
+                "provider": backend_label(result.document.backend),
                 "engine": result.engine,
                 "pipeline": pipeline_description(result.document.backend),
                 "pages": pages,

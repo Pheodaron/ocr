@@ -5,7 +5,7 @@ from typing import Literal
 from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from .catalog import LABELS
+from .catalog import LABELS, REMOVED_BACKENDS
 from .cpu import CPUPolicy, cpu_policy
 
 
@@ -47,8 +47,6 @@ class Settings(BaseSettings):
     llama_port: int = Field(8081, ge=1024, le=65535)
     kv_cache_type: str = "q8_0"
     vlm_context: int = Field(16384, ge=2048, le=32768)
-    kdl_max_regions: int = Field(150, ge=1, le=1000)
-    kdl_max_pixels: int = Field(1_003_520, ge=3136, le=4_014_080)
 
     @model_validator(mode="after")
     def validate_dpi(self):
@@ -92,7 +90,7 @@ class Settings(BaseSettings):
             dict.fromkeys(
                 item.strip()
                 for item in self.enabled_backends.split(",")
-                if item.strip() and item.strip() not in {"nemotron", "jina"}
+                if item.strip() and item.strip() not in REMOVED_BACKENDS
             )
         )
 
@@ -149,7 +147,5 @@ class Settings(BaseSettings):
                 "kv_cache_type",
                 "vlm_timeout_seconds",
                 "vlm_context",
-                "kdl_max_regions",
-                "kdl_max_pixels",
             },
         )

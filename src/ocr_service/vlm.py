@@ -22,7 +22,7 @@ from .engine import InferenceProcessError, Prediction
 from .vlm_models import model_directory, verify_vlm
 
 LOGGER = logging.getLogger(__name__)
-FLASH_ATTENTION_AUTO_BACKENDS = {"dots_mocr", "surya", "lighton", "lighton_small"}
+FLASH_ATTENTION_AUTO_BACKENDS = {"dots_mocr", "lighton_small"}
 
 
 def parent_death_signal(cpu_ids=None):
@@ -148,15 +148,9 @@ class VLMEngine:
             "glm_ocr": lambda: (
                 "Table Recognition:" if settings.glm_task == "table" else "Text Recognition:"
             ),
-            "lighton": lambda: "grounding",
             "lighton_small": lambda: (
                 "grounding" if settings.lighton_small_task == "grounding" else ""
             ),
-            "surya": lambda: (
-                "OCR this image to HTML. Each block is a div with data-label and data-bbox "
-                "(x0 y0 x1 y1, normalized 0-1000)."
-            ),
-            "chandra": lambda: Path(__file__).with_name("chandra_prompt.txt").read_text(),
         }[backend]()
         self.metadata = {
             "name": backend,

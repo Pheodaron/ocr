@@ -4,13 +4,14 @@
 JSON, Markdown и HTML. Русский и английский. Веб-клиент включён в приложение.
 
 **[Пошаговый гайд по развёртыванию](docs/deployment.md)**: Linux/Podman/mise,
-9 моделей, переключение сервисов, API, резервные копии и перенос без интернета.
+4 модели, переключение сервисов, API, резервные копии и перенос без интернета.
 
 ## Запуск через Podman Compose
 
 Требуются Linux x86_64, CPU с AVX2, Podman и Compose provider (`podman-compose`
 либо Docker Compose, вызываемый через `podman compose`). Для сборки и первой
-подготовки весов нужен интернет. Полный набор из 9 вариантов занимает десятки ГБ вместе с образами.
+подготовки весов нужен интернет. Выделите место для весов четырёх провайдеров,
+образов, исходных PDF и результатов.
 На машине с ограниченной RAM запускайте один профиль за раз;
 потребление RAM и скорость нужно измерить на ваших документах.
 
@@ -33,19 +34,14 @@ podman compose logs -f models-glm-ocr glm-ocr
 | Paddle | `paddle` | `paddle` |
 | dots.mocr | `dots_mocr` | `dots-mocr` |
 | GLM-OCR | `glm_ocr` | `glm-ocr` |
-| Chandra OCR 2 | `chandra` | `chandra` |
-| LightOnOCR-3-1B | `lighton` | `lighton` |
-| KDL nano | `kdl` | `kdl` |
 | LightOnOCR-3-0.8B | `lighton_small` | `lighton-small` |
-| Surya OCR 2 | `surya` | `surya` |
-| Falcon-OCR 1.5 | `falcon` | `falcon` |
 
-Поддержка Nemotron и Jina временно удалена. Прежние результаты остаются доступными;
-записи `nemotron` и `jina` в старом списке `OCR_ENABLED_BACKENDS` игнорируются.
+Поддерживаются только Paddle, dots.mocr, GLM-OCR и LightOn 0.8B.
+Прежние результаты удалённых провайдеров остаются доступными; их записи
+в старом списке `OCR_ENABLED_BACKENDS` игнорируются.
 
 У каждого профиля свой `models-*` для подготовки только его весов. Runtime-сервисы
-не скачивают модели. Образы API, VLM, Paddle, KDL и Falcon разделены; VLM не устанавливает
-Paddle/PyTorch. У всех сервисов общие данные и общий каталог весов, но разные
+не скачивают модели. Образы API, VLM и Paddle разделены; VLM не устанавливает Paddle. У всех сервисов общие данные и общий каталог весов, но разные
 очереди заданий и блокировки по backend.
 
 В компактной форме выберите одного провайдера OCR: список показывает его
@@ -88,7 +84,7 @@ podman compose stop glm-ocr
 podman compose --profile dots_mocr up --build -d
 # После прогона dots:
 podman compose stop dots-mocr
-podman compose --profile lighton up --build -d
+podman compose --profile lighton_small up --build -d
 ```
 
 Задания выключенных моделей остаются в очереди до готовности сервиса.
@@ -117,8 +113,7 @@ podman compose down
 содержат настройки веб-сервиса и распознавания, фиксируемые при создании заданий.
 
 - `api`: FastAPI/Uvicorn на localhost; веб-страница без CDN и без весов.
-- `paddle`, `dots-mocr`, `glm-ocr`, `chandra`, `lighton`, `kdl`, `lighton-small`,
-  `surya`, `falcon`: независимые
+- `paddle`, `dots-mocr`, `glm-ocr`, `lighton-small`: независимые
   OCR-сервисы в своих профилях. У каждого `network_mode: none`, свой heartbeat,
   свой backend-фильтр очереди и один распознаваемый документ одновременно.
 - `models-*`: одноразовая подготовка весов соответствующего сервиса.
@@ -197,12 +192,7 @@ JSON имеет `schema_version: "1.0"`, SHA256 исходного PDF, свед
 | `paddle` | PP-StructureV3 | Исходные Paddle-модели | PaddlePaddle CPU, layout + OCR + таблицы |
 | `dots_mocr` | dots-studio/dots.mocr | Q5_K_M + свой mmproj Q8_0 | llama.cpp, layout JSON + HTML-таблицы |
 | `glm_ocr` | zai-org/GLM-OCR | Q8_0 + свой mmproj Q8_0 | llama.cpp, Text Recognition / Table Recognition |
-| `chandra` | datalab-to/chandra-ocr-2 | Q5_K_M + свой mmproj Q8_0 | llama.cpp, HTML с layout |
-| `lighton` | lightonai/LightOnOCR-3-1B | Q8_0 + свой mmproj Q8_0 | llama.cpp, grounding + Markdown/HTML |
-| `kdl` | KDLAI/KDL-Frontier-Parser-nano | Исходные safetensors, CPU FP32 | Transformers: layout → crop → recognition → OTSL |
 | `lighton_small` | lightonai/LightOnOCR-3-0.8B | prithivMLmods Q4_K_M + свой mmproj Q8_0 | llama.cpp, transcription; [настройка](docs/lighton-q4.md) |
-| `surya` | datalab-to/surya-ocr-2 | Официальный F16 GGUF + mmproj | llama.cpp, HTML с layout |
-| `falcon` | tiiuae/Falcon-OCR v1.5 | Исходные safetensors, CPU FP32 | Transformers с адаптацией Triton-операций под CPU |
 
 Подробности, источники весов, промпты, ограничения и параметры:
 [docs/backends.md](docs/backends.md). **Качество и CPU-производительность этих моделей
@@ -229,8 +219,8 @@ DPI, а перед следующей сервер перезапускаетс�
 
 ```sh
 curl -F 'file=@document.pdf' -F 'backends=paddle' -F 'backends=dots_mocr' \
-  -F 'backends=glm_ocr' -F 'backends=chandra' -F 'backends=lighton' \
-  -F 'backends=kdl' http://localhost:8000/api/comparisons
+  -F 'backends=glm_ocr' -F 'backends=dots_mocr' \
+  -F 'backends=lighton_small' http://localhost:8000/api/comparisons
 curl http://localhost:8000/api/comparisons/COMPARISON_ID
 ```
 
@@ -275,7 +265,7 @@ layout, OCR и восстановление таблиц. Формулы, диа
 Runtime-сервисы не имеют внешней сети и получают модели только для чтения.
 
 Для основных GGUF закреплены revision и SHA256 из карточек артефактов.
-Для Paddle/KDL/Falcon и dots BF16 SHA256 записывается после подготовки
+Для Paddle и dots BF16 SHA256 записывается после подготовки
 и проверяется перед загрузкой; это контроль последующих изменений.
 Manifest входит в результат. Для обновления моделей сначала сохраните старый
 набор и подготовьте новый отдельно.
@@ -295,10 +285,10 @@ OCR_WORKER_BACKEND=glm_ocr mise run worker
 Для VLM через локальный mise/uv нужен установленный `llama-server` b10000
 (в Compose он уже включён). `OCR_LLAMA_SERVER` задаёт путь к бинарнику.
 
-Без mise эквивалентны `uv sync --frozen --extra ocr --extra kdl`,
+Без mise эквивалентны `uv sync --frozen --extra ocr`,
 `uv run --frozen ocr-service prepare-models --download`,
 `uv run --frozen ocr-service api` и
-`OCR_WORKER_BACKEND=glm_ocr uv run --frozen --extra ocr --extra kdl ocr-service worker`.
+`OCR_WORKER_BACKEND=glm_ocr uv run --frozen --extra ocr ocr-service worker`.
 
 По умолчанию `OCR_CPU_THREADS=auto` и `OCR_LIGHTON_SMALL_THREADS=auto`:
 инференс использует доступные логические потоки с учётом CPU affinity и видимых
@@ -336,7 +326,7 @@ OCR_RUN_MODEL_TESTS=1 uv run --frozen --extra ocr pytest -m ocr -v
 ошибку средней страницы, продолжение следующих, восстановление очереди,
 сохранение первого прохода, структуру таблиц, очистку HTML и целостность моделей.
 Они не подтверждают качество настоящего OCR. Дополнительно проверяются сравнения,
-HTTP-контракт мультимодального сервера, lifecycle, форматы VLM, OTSL и KDL crop routing. Реальный тест вызывает Paddle и
+HTTP-контракт мультимодального сервера, lifecycle и форматы VLM. Реальный тест вызывает Paddle и
 проверяет русское слово, номер с ведущими нулями и извлечение таблицы.
 
 Лицензионные сведения: [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

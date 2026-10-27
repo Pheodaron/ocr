@@ -197,12 +197,7 @@ JSON/Markdown/HTML; ZIP, офисные документы и XLSX в этот �
 | Paddle PP-StructureV3 | `paddle` | `paddle` | `paddle` |
 | dots.mocr Q5_K_M | `dots_mocr` | `dots-mocr` | `vlm` |
 | GLM-OCR Q8_0 | `glm_ocr` | `glm-ocr` | `vlm` |
-| Chandra OCR 2 Q5_K_M | `chandra` | `chandra` | `vlm` |
-| LightOnOCR-3-1B Q8_0 | `lighton` | `lighton` | `vlm` |
-| KDL nano FP32 | `kdl` | `kdl` | `kdl` |
-| LightOnOCR-3-0.8B Q8_0 | `lighton_small` | `lighton-small` | `vlm` |
-| Surya OCR 2 F16 | `surya` | `surya` | `vlm` |
-| Falcon-OCR 1.5 FP32 | `falcon` | `falcon` | `falcon` |
+| LightOnOCR-3-0.8B Q4_K_M | `lighton_small` | `lighton-small` | `vlm` |
 
 Полное имя образа: `localhost/document-ocr-<образ runtime>:0.1.0`.
 Подготовка весов каждого worker называется `models-<worker-сервис>`.
@@ -217,7 +212,7 @@ podman compose stop glm-ocr
 podman compose --profile dots_mocr up --build -d
 # После завершения dots.mocr:
 podman compose stop dots-mocr
-podman compose --profile falcon up --build -d
+podman compose --profile lighton_small up --build -d
 ```
 
 В клиенте выберите одного провайдера и один или несколько PDF. Для сравнения
@@ -237,7 +232,7 @@ podman compose --profile falcon up --build -d
 
 ```sh
 curl -fsS -F 'file=@document.pdf' \
-  -F 'backends=glm_ocr' -F 'backends=dots_mocr' -F 'backends=falcon' \
+  -F 'backends=glm_ocr' -F 'backends=dots_mocr' -F 'backends=lighton_small' \
   http://127.0.0.1:8000/api/comparisons
 # Подставьте id сравнения из ответа:
 COMPARISON_ID=вставьте_id_сравнения
@@ -375,7 +370,7 @@ cp backup/pipeline.env .env
 
 ## 8. Перенести на машину без интернета
 
-Ниже пример для GLM и Falcon: образы обоих вариантов переносятся заранее,
+Ниже пример для GLM и LightOn 0.8B: образы обоих вариантов переносятся заранее,
 но на целевой машине модели запускаются по одной. Podman и Compose provider
 должны быть установлены на целевой машине заранее. Архитектура обеих машин — x86_64.
 
@@ -384,11 +379,11 @@ cp backup/pipeline.env .env
 Из каталога проекта:
 
 ```sh
-podman compose --profile glm_ocr --profile falcon build
+podman compose --profile glm_ocr --profile lighton_small build
 OCR_ALLOW_MODEL_DOWNLOAD=true podman compose --profile glm_ocr run --rm models-glm-ocr
-OCR_ALLOW_MODEL_DOWNLOAD=true podman compose --profile falcon run --rm models-falcon
+OCR_ALLOW_MODEL_DOWNLOAD=true podman compose --profile lighton_small run --rm models-lighton-small
 mkdir -p offline/images
-for image in api vlm falcon; do
+for image in api vlm; do
   podman save --format oci-archive \
     --output "offline/images/ocr-$image.tar" \
     "localhost/document-ocr-$image:0.1.0"
@@ -402,8 +397,8 @@ git rev-parse HEAD > offline/revision.txt
 Каждый образ записывается в отдельный OCI-архив. Веса экспортируются отдельно
 вместе с manifest и владельцами файлов; не нужно вручную копировать отдельные GGUF.
 Для других профилей подготовьте их `models-*` и добавьте runtime-образ из таблицы.
-`api` нужен всегда. Для dots, Chandra, обеих LightOn и Surya используется
-тот же `vlm`.
+`api` нужен всегда. Для dots.mocr, GLM-OCR и LightOn 0.8B используется
+один образ `vlm`.
 
 Перенесите весь каталог `offline/` доступным вам способом.
 
@@ -433,11 +428,11 @@ podman compose --profile glm_ocr logs -f models-glm-ocr glm-ocr
 
 Подготовка теперь только проверяет локальные файлы. `--no-build` исключает
 сборку; все нужные образы уже должны быть загружены. Workers работают без внешней
-сети. Для переключения на Falcon:
+сети. Для переключения на LightOn 0.8B:
 
 ```sh
 podman compose stop glm-ocr
-OCR_ALLOW_MODEL_DOWNLOAD=false podman compose --profile falcon up -d --no-build
+OCR_ALLOW_MODEL_DOWNLOAD=false podman compose --profile lighton_small up -d --no-build
 ```
 
 Для этого варианта `.git` не переносится: обновления доставляются новым архивом
@@ -470,7 +465,7 @@ OCR_ALLOW_MODEL_DOWNLOAD=false podman compose --profile falcon up -d --no-build
 
 ```sh
 podman ps -a
-podman compose --profile falcon logs --tail=100 models-falcon falcon api
+podman compose --profile lighton_small logs --tail=100 models-lighton-small lighton-small api
 ```
 
 Если dots.mocr работает слишком долго или убит OOM-killer, начните новый
@@ -495,7 +490,7 @@ A4 при 150 dpi даёт примерно 1241×1754 px (2,18 млн пикс�
 исходный режим для текста 10–12 pt; точность зависит от качества скана.
 Не оставляйте старые значения 1000000/1500000 в `.env`: они уменьшат A4
 ниже выбранных 150 dpi. Для остальных llama.cpp моделей действует общий
-лимит; KDL/Falcon используют свои processors.
+лимит пикселей перед передачей изображения в llama.cpp.
 Для мелкого текста можно поднять DPI до 200, но оба лимита для dots тогда
 должны быть не ниже 4000000, чтобы сохранить A4 без уменьшения.
 Это увеличивает нагрузку и RAM. Генерация длинного JSON/HTML на CPU тоже
@@ -579,7 +574,7 @@ ssh -L 8000:127.0.0.1:8000 user@ocr-host
 ```sh
 mise trust
 mise install
-OCR_WORKER_BACKEND=falcon mise run up
+OCR_WORKER_BACKEND=lighton_small mise run up
 # Для остановки всех профилей используйте команду из раздела 6.
 ```
 
@@ -589,7 +584,6 @@ OCR_WORKER_BACKEND=falcon mise run up
 
 Сборки и контракты проверены, но настоящее распознавание всех моделей и их
 CPU-производительность ещё не подтверждены: загрузка весов заблокирована
-в окружении разработки. В частности, Falcon использует отдельную CPU-адаптацию.
-Не принимайте HTTP 202 или успешную сборку
+в окружении разработки. Не принимайте HTTP 202 или успешную сборку
 за подтверждение OCR-качества. Детали: [проверки](validation.md),
 [алгоритмы и ограничения моделей](backends.md), [лицензии](../THIRD_PARTY_NOTICES.md).

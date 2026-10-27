@@ -44,12 +44,7 @@ def response(backend, content, finish="stop"):
             ),
         ),
         (
-            "chandra",
-            '<div data-bbox="0 0 1000 1000" data-label="Table">'
-            "<table><tr><td>00125</td><td>150 кВт</td></tr></table></div>",
-        ),
-        (
-            "lighton",
+            "lighton_small",
             "![table](0,0,1000,1000)\n<table><tr><td>00125</td><td>150 кВт</td></tr></table>",
         ),
     ],
@@ -60,7 +55,7 @@ def test_model_formats_preserve_table_strings_without_fabricating_scores(backend
     assert page.tables[0].cells[1].text == "150 кВт"
     assert page.confidence is None and page.needs_review
     assert page.metrics["usage"]["completion_tokens"] == 20
-    if backend in {"lighton", "chandra"}:
+    if backend == "lighton_small":
         assert page.blocks[0].bbox == [0, 0, 1000, 1500]
     if backend == "dots_mocr":
         assert page.blocks[0].bbox is None
@@ -94,10 +89,8 @@ def test_generative_review_does_not_trigger_unnecessary_dpi_retry(client, pdf_by
     [
         ("glm_ocr", "transcription"),
         ("dots_mocr", "transcription"),
-        ("lighton", "transcription"),
         ("lighton_small", "transcription"),
         ("lighton_small", "grounding"),
-        ("surya", "transcription"),
     ],
 )
 def test_local_multimodal_http_contract_and_cpu_server_lifecycle(
@@ -199,9 +192,7 @@ def test_local_multimodal_http_contract_and_cpu_server_lifecycle(
         else:
             assert command[command.index("--cpu-mask") + 1] == "fffff"
             assert recorded["environment"]["OMP_NUM_THREADS"] == "20"
-        expected_flash_attention = (
-            "auto" if backend in {"dots_mocr", "surya", "lighton", "lighton_small"} else "off"
-        )
+        expected_flash_attention = "auto" if backend in {"dots_mocr", "lighton_small"} else "off"
         assert command[command.index("--flash-attn") + 1] == expected_flash_attention
         assert engine.metadata["flash_attention"] == expected_flash_attention
         assert command[command.index("--n-gpu-layers") + 1] == "0"
@@ -356,7 +347,7 @@ def test_standard_a4_keeps_full_150_dpi_resolution(settings, tmp_path, backend):
 
 
 def test_vlm_resize_is_visible_and_bboxes_still_refer_to_original_preview():
-    raw = response("lighton", "![text](0,0,1000,1000)\nМелкий текст")
+    raw = response("lighton_small", "![text](0,0,1000,1000)\nМелкий текст")
     raw["image_preprocessing"] = {
         "resized": True,
         "render_width": 2000,

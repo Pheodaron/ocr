@@ -71,19 +71,3 @@ RUN --mount=type=secret,id=proxy_ca --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --extra ocr --no-dev --no-install-project
 USER 10001:10001
 CMD ["ocr-service", "worker"]
-
-FROM base AS kdl
-USER root
-RUN --mount=type=secret,id=proxy_ca --mount=type=cache,target=/root/.cache/uv \
-    if [ -f /run/secrets/proxy_ca ]; then export SSL_CERT_FILE=/run/secrets/proxy_ca; fi; \
-    uv sync --frozen --extra kdl --no-dev --no-install-project
-USER 10001:10001
-CMD ["ocr-service", "worker"]
-
-FROM base AS falcon
-USER root
-RUN --mount=type=secret,id=proxy_ca --mount=type=cache,target=/root/.cache/uv \
-    if [ -f /run/secrets/proxy_ca ]; then export SSL_CERT_FILE=/run/secrets/proxy_ca; fi; \
-    uv sync --frozen --extra falcon --no-dev --no-install-project
-USER 10001:10001
-CMD ["ocr-service", "worker"]

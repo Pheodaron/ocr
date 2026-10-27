@@ -27,7 +27,7 @@ services:
       OCR_MAX_UPLOAD_MB: ${OCR_MAX_UPLOAD_MB:-64}
       OCR_MAX_PAGES: ${OCR_MAX_PAGES:-300}
       OCR_MAX_PAGE_PIXELS: ${OCR_MAX_PAGE_PIXELS:-30000000}
-      OCR_ENABLED_BACKENDS: ${OCR_ENABLED_BACKENDS:-paddle,dots_mocr,glm_ocr,chandra,lighton,kdl,lighton_small,surya,falcon}
+      OCR_ENABLED_BACKENDS: ${OCR_ENABLED_BACKENDS:-paddle,dots_mocr,glm_ocr,lighton_small}
       OCR_DOTS_QUANTIZATION: ${OCR_DOTS_QUANTIZATION:-Q5_K_M}
       OCR_DOTS_CONTEXT: ${OCR_DOTS_CONTEXT:-32768}
       OCR_GLM_CONTEXT: ${OCR_GLM_CONTEXT:-16384}
@@ -39,8 +39,6 @@ services:
       OCR_KV_CACHE_TYPE: ${OCR_KV_CACHE_TYPE:-q8_0}
       OCR_VLM_TIMEOUT_SECONDS: ${OCR_VLM_TIMEOUT_SECONDS:-3600}
       OCR_VLM_STARTUP_SECONDS: ${OCR_VLM_STARTUP_SECONDS:-300}
-      OCR_KDL_MAX_REGIONS: ${OCR_KDL_MAX_REGIONS:-150}
-      OCR_KDL_MAX_PIXELS: ${OCR_KDL_MAX_PIXELS:-1003520}
     ports: ['127.0.0.1:${OCR_PORT:-8000}:8000']
     volumes: ['data:/data']
     init: true
@@ -206,154 +204,6 @@ services:
       models-glm-ocr:
         condition: service_completed_successfully
 
-  models-chandra:
-    image: localhost/document-ocr-api:0.1.0
-    build:
-      context: .
-      dockerfile: Containerfile
-      target: api
-    command: [ocr-service, prepare-models]
-    volumes: ['models:/models']
-    restart: 'no'
-    profiles: [chandra]
-    environment:
-      OCR_DATA_DIR: /data
-      OCR_MODELS_DIR: /models
-      OCR_ENABLED_BACKENDS: chandra
-      OCR_ALLOW_MODEL_DOWNLOAD: ${OCR_ALLOW_MODEL_DOWNLOAD:-true}
-
-  chandra:
-    image: localhost/document-ocr-vlm:0.1.0
-    build:
-      context: .
-      dockerfile: Containerfile
-      target: vlm
-    command: [ocr-service, worker]
-    volumes: ['data:/data', 'models:/models:ro']
-    network_mode: none
-    init: true
-    shm_size: 512mb
-    stop_grace_period: 120s
-    restart: unless-stopped
-    profiles: [chandra]
-    environment:
-      OCR_DATA_DIR: /data
-      OCR_MODELS_DIR: /models
-      OCR_ENABLED_BACKENDS: chandra
-      OCR_WORKER_BACKEND: chandra
-      OCR_CPU_THREADS: ${OCR_CPU_THREADS:-auto}
-      OCR_CPU_RESERVE_CORES: ${OCR_CPU_RESERVE_CORES:-1}
-      OCR_CPU_NICE: ${OCR_CPU_NICE:-10}
-      OCR_VLM_DPI: ${OCR_VLM_DPI:-150}
-      OCR_MAX_PAGE_PIXELS: ${OCR_MAX_PAGE_PIXELS:-30000000}
-      OCR_VLM_MAX_PIXELS: ${OCR_VLM_MAX_PIXELS:-2500000}
-      OCR_VLM_MAX_TOKENS: ${OCR_VLM_MAX_TOKENS:-8192}
-      OCR_VLM_TIMEOUT_SECONDS: ${OCR_VLM_TIMEOUT_SECONDS:-3600}
-      OCR_VLM_STARTUP_SECONDS: ${OCR_VLM_STARTUP_SECONDS:-300}
-      OCR_KV_CACHE_TYPE: ${OCR_KV_CACHE_TYPE:-q8_0}
-      OCR_VLM_CONTEXT: ${OCR_VLM_CONTEXT:-16384}
-    depends_on:
-      models-chandra:
-        condition: service_completed_successfully
-
-  models-lighton:
-    image: localhost/document-ocr-api:0.1.0
-    build:
-      context: .
-      dockerfile: Containerfile
-      target: api
-    command: [ocr-service, prepare-models]
-    volumes: ['models:/models']
-    restart: 'no'
-    profiles: [lighton]
-    environment:
-      OCR_DATA_DIR: /data
-      OCR_MODELS_DIR: /models
-      OCR_ENABLED_BACKENDS: lighton
-      OCR_ALLOW_MODEL_DOWNLOAD: ${OCR_ALLOW_MODEL_DOWNLOAD:-true}
-
-  lighton:
-    image: localhost/document-ocr-vlm:0.1.0
-    build:
-      context: .
-      dockerfile: Containerfile
-      target: vlm
-    command: [ocr-service, worker]
-    volumes: ['data:/data', 'models:/models:ro']
-    network_mode: none
-    init: true
-    shm_size: 512mb
-    stop_grace_period: 120s
-    restart: unless-stopped
-    profiles: [lighton]
-    environment:
-      OCR_DATA_DIR: /data
-      OCR_MODELS_DIR: /models
-      OCR_ENABLED_BACKENDS: lighton
-      OCR_WORKER_BACKEND: lighton
-      OCR_CPU_THREADS: ${OCR_CPU_THREADS:-auto}
-      OCR_CPU_RESERVE_CORES: ${OCR_CPU_RESERVE_CORES:-1}
-      OCR_CPU_NICE: ${OCR_CPU_NICE:-10}
-      OCR_VLM_DPI: ${OCR_VLM_DPI:-150}
-      OCR_MAX_PAGE_PIXELS: ${OCR_MAX_PAGE_PIXELS:-30000000}
-      OCR_VLM_MAX_PIXELS: ${OCR_VLM_MAX_PIXELS:-2500000}
-      OCR_VLM_MAX_TOKENS: ${OCR_VLM_MAX_TOKENS:-8192}
-      OCR_VLM_TIMEOUT_SECONDS: ${OCR_VLM_TIMEOUT_SECONDS:-3600}
-      OCR_VLM_STARTUP_SECONDS: ${OCR_VLM_STARTUP_SECONDS:-300}
-      OCR_KV_CACHE_TYPE: ${OCR_KV_CACHE_TYPE:-q8_0}
-      OCR_VLM_CONTEXT: ${OCR_VLM_CONTEXT:-16384}
-    depends_on:
-      models-lighton:
-        condition: service_completed_successfully
-
-  models-kdl:
-    image: localhost/document-ocr-api:0.1.0
-    build:
-      context: .
-      dockerfile: Containerfile
-      target: api
-    command: [ocr-service, prepare-models]
-    volumes: ['models:/models']
-    restart: 'no'
-    profiles: [kdl]
-    environment:
-      OCR_DATA_DIR: /data
-      OCR_MODELS_DIR: /models
-      OCR_ENABLED_BACKENDS: kdl
-      OCR_ALLOW_MODEL_DOWNLOAD: ${OCR_ALLOW_MODEL_DOWNLOAD:-true}
-
-  kdl:
-    image: localhost/document-ocr-kdl:0.1.0
-    build:
-      context: .
-      dockerfile: Containerfile
-      target: kdl
-    command: [ocr-service, worker]
-    volumes: ['data:/data', 'models:/models:ro']
-    network_mode: none
-    init: true
-    shm_size: 512mb
-    stop_grace_period: 120s
-    restart: unless-stopped
-    profiles: [kdl]
-    environment:
-      OCR_DATA_DIR: /data
-      OCR_MODELS_DIR: /models
-      OCR_ENABLED_BACKENDS: kdl
-      OCR_WORKER_BACKEND: kdl
-      OCR_CPU_THREADS: ${OCR_CPU_THREADS:-auto}
-      OCR_CPU_RESERVE_CORES: ${OCR_CPU_RESERVE_CORES:-1}
-      OCR_CPU_NICE: ${OCR_CPU_NICE:-10}
-      OCR_VLM_DPI: ${OCR_VLM_DPI:-150}
-      OCR_MAX_PAGE_PIXELS: ${OCR_MAX_PAGE_PIXELS:-30000000}
-      OCR_VLM_MAX_TOKENS: ${OCR_VLM_MAX_TOKENS:-8192}
-      OCR_VLM_TIMEOUT_SECONDS: ${OCR_VLM_TIMEOUT_SECONDS:-3600}
-      OCR_KDL_MAX_REGIONS: ${OCR_KDL_MAX_REGIONS:-150}
-      OCR_KDL_MAX_PIXELS: ${OCR_KDL_MAX_PIXELS:-1003520}
-    depends_on:
-      models-kdl:
-        condition: service_completed_successfully
-
   models-lighton-small:
     image: localhost/document-ocr-api:0.1.0
     build:
@@ -408,101 +258,6 @@ services:
       models-lighton-small:
         condition: service_completed_successfully
 
-  models-surya:
-    image: localhost/document-ocr-api:0.1.0
-    build:
-      context: .
-      dockerfile: Containerfile
-      target: api
-    command: [ocr-service, prepare-models]
-    volumes: ['models:/models']
-    restart: 'no'
-    profiles: [surya]
-    environment:
-      OCR_DATA_DIR: /data
-      OCR_MODELS_DIR: /models
-      OCR_ENABLED_BACKENDS: surya
-      OCR_ALLOW_MODEL_DOWNLOAD: ${OCR_ALLOW_MODEL_DOWNLOAD:-true}
-
-  surya:
-    image: localhost/document-ocr-vlm:0.1.0
-    build:
-      context: .
-      dockerfile: Containerfile
-      target: vlm
-    command: [ocr-service, worker]
-    volumes: ['data:/data', 'models:/models:ro']
-    network_mode: none
-    init: true
-    shm_size: 512mb
-    stop_grace_period: 120s
-    restart: unless-stopped
-    profiles: [surya]
-    environment:
-      OCR_DATA_DIR: /data
-      OCR_MODELS_DIR: /models
-      OCR_ENABLED_BACKENDS: surya
-      OCR_WORKER_BACKEND: surya
-      OCR_CPU_THREADS: ${OCR_CPU_THREADS:-auto}
-      OCR_CPU_RESERVE_CORES: ${OCR_CPU_RESERVE_CORES:-1}
-      OCR_CPU_NICE: ${OCR_CPU_NICE:-10}
-      OCR_VLM_DPI: ${OCR_VLM_DPI:-150}
-      OCR_MAX_PAGE_PIXELS: ${OCR_MAX_PAGE_PIXELS:-30000000}
-      OCR_VLM_MAX_PIXELS: ${OCR_VLM_MAX_PIXELS:-2500000}
-      OCR_VLM_MAX_TOKENS: ${OCR_VLM_MAX_TOKENS:-8192}
-      OCR_VLM_TIMEOUT_SECONDS: ${OCR_VLM_TIMEOUT_SECONDS:-3600}
-      OCR_VLM_STARTUP_SECONDS: ${OCR_VLM_STARTUP_SECONDS:-300}
-      OCR_KV_CACHE_TYPE: ${OCR_KV_CACHE_TYPE:-q8_0}
-      OCR_VLM_CONTEXT: ${OCR_VLM_CONTEXT:-16384}
-    depends_on:
-      models-surya:
-        condition: service_completed_successfully
-
-  models-falcon:
-    image: localhost/document-ocr-api:0.1.0
-    build:
-      context: .
-      dockerfile: Containerfile
-      target: api
-    command: [ocr-service, prepare-models]
-    volumes: ['models:/models']
-    restart: 'no'
-    profiles: [falcon]
-    environment:
-      OCR_DATA_DIR: /data
-      OCR_MODELS_DIR: /models
-      OCR_ENABLED_BACKENDS: falcon
-      OCR_ALLOW_MODEL_DOWNLOAD: ${OCR_ALLOW_MODEL_DOWNLOAD:-true}
-
-  falcon:
-    image: localhost/document-ocr-falcon:0.1.0
-    build:
-      context: .
-      dockerfile: Containerfile
-      target: falcon
-    command: [ocr-service, worker]
-    volumes: ['data:/data', 'models:/models:ro']
-    network_mode: none
-    init: true
-    shm_size: 512mb
-    stop_grace_period: 120s
-    restart: unless-stopped
-    profiles: [falcon]
-    environment:
-      OCR_DATA_DIR: /data
-      OCR_MODELS_DIR: /models
-      OCR_ENABLED_BACKENDS: falcon
-      OCR_WORKER_BACKEND: falcon
-      OCR_CPU_THREADS: ${OCR_CPU_THREADS:-auto}
-      OCR_CPU_RESERVE_CORES: ${OCR_CPU_RESERVE_CORES:-1}
-      OCR_CPU_NICE: ${OCR_CPU_NICE:-10}
-      OCR_VLM_DPI: ${OCR_VLM_DPI:-150}
-      OCR_MAX_PAGE_PIXELS: ${OCR_MAX_PAGE_PIXELS:-30000000}
-      OCR_VLM_MAX_TOKENS: ${OCR_VLM_MAX_TOKENS:-8192}
-      OCR_VLM_TIMEOUT_SECONDS: ${OCR_VLM_TIMEOUT_SECONDS:-3600}
-    depends_on:
-      models-falcon:
-        condition: service_completed_successfully
 volumes:
   data: null
   models: null

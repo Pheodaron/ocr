@@ -3,7 +3,6 @@
 import json
 import re
 
-from lxml import html
 from markdown_it import MarkdownIt
 
 from .schemas import Block, PageResult, Table
@@ -107,28 +106,7 @@ def adapt_vlm(raw: dict, number: int, dpi: int, width: int, height: int) -> Page
             # A truncated JSON is still valuable evidence, but cannot become fake cells.
             warnings.append(f"Не удалось разобрать layout JSON: {error}")
             blocks = []
-    elif raw["ocr_backend"] in {"chandra", "surya"}:
-        root = html.fragment_fromstring(
-            content, create_parent="div", parser=html.HTMLParser(no_network=True)
-        )
-        for dangerous in root.xpath(".//script | .//style | .//iframe | .//object"):
-            dangerous.drop_tree()
-        for element in root.xpath(".//div[@data-bbox]"):
-            bbox = normalized_bbox(element.get("data-bbox", "").split(), width, height)
-            kind = element.get("data-label", "text").lower()
-            blocks.append(Block(kind=kind, text="\n".join(element.itertext()).strip(), bbox=bbox))
-        # HTML is never passed through to the client; tables are sanitized below.
-        for element in root.xpath(".//table"):
-            element.drop_tree()
-        plain = "\n".join(root.itertext()).strip()
-        original = html.fragment_fromstring(
-            content, create_parent="div", parser=html.HTMLParser(no_network=True)
-        )
-        tables_markup = "\n\n".join(
-            html.tostring(element, encoding="unicode") for element in original.xpath(".//table")
-        )
-        content = plain + ("\n\n" + tables_markup if tables_markup else "")
-    elif raw["ocr_backend"] in {"lighton", "lighton_small"}:
+    elif raw["ocr_backend"] == "lighton_small":
         pattern = re.compile(r"!\[([\w+]+)\]\((\d+),(\d+),(\d+),(\d+)\)\s*")
         matches = list(pattern.finditer(content))
         for index, match in enumerate(matches):
@@ -215,47 +193,3 @@ def normalized_bbox(values, width: int, height: int) -> list[float] | None:
         return [x1 * width / 1000, y1 * height / 1000, x2 * width / 1000, y2 * height / 1000]
     except (ValueError, TypeError):
         return None
-
-
-def adapt_kdl(raw: dict, number: int, dpi: int, width: int, height: int) -> PageResult:
-    blocks, tables, markdown = [], [], []
-    warnings = list(raw["warnings"])
-    for region in raw["blocks"]:
-        text = region.get("text", "")
-        kind = region["kind"]
-        if region.get("table_html"):
-            try:
-                safe_html, cells = parse_table(region["table_html"])
-                tables.append(Table(html=safe_html, cells=cells, bbox=region["bbox"]))
-                markdown.append(safe_html)
-                text = "\n".join(cell.text for cell in cells)
-            except ValueError as error:
-                warnings.append(str(error))
-                markdown.append(text)
-        else:
-            markdown.append(text)
-        blocks.append(Block(kind=kind, text=text, bbox=region["bbox"]))
-    if all(region.get("error") for region in raw["blocks"]):
-        raise ValueError("Не удалось распознать ни одну область KDL")
-    calls = raw.get("calls", [])
-    return PageResult(
-        number=number,
-        dpi=dpi,
-        width=width,
-        height=height,
-        blocks=blocks,
-        tables=tables,
-        text="\n\n".join(block.text for block in blocks),
-        markdown="\n\n".join(markdown),
-        confidence=None,
-        needs_review=True,
-        warnings=warnings,
-        metrics={
-            "usage": {
-                "completion_tokens": sum(call["completion_tokens"] for call in calls),
-                "prompt_tokens": sum(call["prompt_tokens"] for call in calls),
-            },
-            "model_seconds": sum(call["seconds"] for call in calls),
-            "calls": len(calls),
-        },
-    )

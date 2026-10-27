@@ -51,24 +51,6 @@ def main() -> None:
                         manifest = verify_models(settings.models_dir)
                     else:
                         manifest = prepare_models(settings.models_dir, allow_download=args.download)
-                elif backend == "falcon":
-                    from .hf_models import prepare_hf, verify_hf
-
-                    manifest = (
-                        verify_hf(backend, settings)
-                        if args.command == "check-models"
-                        else prepare_hf(
-                            backend, settings, download=args.download, source=args.import_from
-                        )
-                    )
-                elif backend == "kdl":
-                    from .kdl_models import prepare_kdl, verify_kdl
-
-                    manifest = (
-                        verify_kdl(settings)
-                        if args.command == "check-models"
-                        else prepare_kdl(settings, download=args.download, source=args.import_from)
-                    )
                 else:
                     from .vlm_models import prepare_vlm, verify_vlm
 

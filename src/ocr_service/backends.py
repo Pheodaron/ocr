@@ -1,23 +1,26 @@
 """Stable, user-visible OCR configuration identities."""
 
-from .catalog import LABELS, VLM_BACKENDS
+from .catalog import VLM_BACKENDS, backend_label
 from .config import Settings
+
+# Keep old result descriptions readable without enabling their inference engines.
+DISPLAY_VLM_BACKENDS = VLM_BACKENDS | {"chandra", "lighton", "surya", "jina"}
 
 
 def configuration_details(backend: str, config: dict) -> dict:
     return {
         "id": backend,
-        "label": LABELS.get(backend, backend),
+        "label": backend_label(backend),
         "quantization": config.get("dots_quantization", "Q5_K_M")
         if backend == "dots_mocr"
         else config.get("lighton_small_quantization", "Q8_0")
         if backend == "lighton_small"
         else "Q8_0"
-        if backend in {"glm_ocr", "lighton", "lighton_small"}
+        if backend in {"glm_ocr", "lighton", "jina"}
         else "Q5_K_M"
         if backend == "chandra"
         else "FP32"
-        if backend in {"kdl", "falcon"}
+        if backend in {"kdl", "falcon", "nemotron"}
         else "F16"
         if backend == "surya"
         else None,
@@ -28,7 +31,7 @@ def configuration_details(backend: str, config: dict) -> dict:
         else 8192
         if backend == "kdl"
         else config.get("vlm_context", 16384)
-        if backend in VLM_BACKENDS
+        if backend in DISPLAY_VLM_BACKENDS
         else None,
         "task": config.get("glm_task", "text")
         if backend == "glm_ocr"
@@ -45,7 +48,7 @@ def configuration_details(backend: str, config: dict) -> dict:
         )
         if backend == "dots_mocr"
         else config.get("vlm_max_pixels", 1_500_000)
-        if backend in VLM_BACKENDS
+        if backend in DISPLAY_VLM_BACKENDS
         else None,
     }
 
@@ -62,14 +65,6 @@ def create_engine(backend: str, settings: Settings):
         from .engine import PaddleEngine
 
         return PaddleEngine(settings)
-    if backend == "kdl":
-        from .kdl import KDLEngine
-
-        return KDLEngine(settings)
-    if backend == "falcon":
-        from .falcon import FalconEngine
-
-        return FalconEngine(settings)
     if backend in VLM_BACKENDS:
         from .vlm import VLMEngine
 

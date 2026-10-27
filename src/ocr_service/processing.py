@@ -127,11 +127,7 @@ def process_page(
                 raw = json.loads(json.dumps(prediction.raw, default=json_default))
                 atomic_json(directory / f"page-{number}-{dpi}.raw.json", raw)
             with timed_stage(stages, "parse_result", format=prediction.format):
-                if prediction.format == "kdl":
-                    from .vlm_adapter import adapt_kdl
-
-                    candidate = adapt_kdl(raw, number, dpi, processed.shape[1], processed.shape[0])
-                elif prediction.format == "vlm":
+                if prediction.format == "vlm":
                     from .vlm_adapter import adapt_vlm
 
                     candidate = adapt_vlm(raw, number, dpi, processed.shape[1], processed.shape[0])

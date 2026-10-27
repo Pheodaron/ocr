@@ -128,7 +128,7 @@ def test_health_reports_each_service_independently(client):
     result = client.get("/health").json()
     assert result["workers"]["glm_ocr"]["ready"]
     assert not result["workers"]["dots_mocr"]["ready"]
-    assert not result["workers"]["kdl"]["ready"]
+    assert not result["workers"]["lighton_small"]["ready"]
     assert client.get("/ready").status_code == 200
     db.heartbeat("offline", backend="glm_ocr")
     assert client.get("/ready").status_code == 503

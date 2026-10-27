@@ -39,8 +39,8 @@ Raw JSON сохраняется в `data/documents/ID/page-N-DPI.raw.json`.
 Рендер зависит от backend: Paddle использует `OCR_DPI=250` и при необходимости
 `OCR_RETRY_DPI=350`; все остальные модели — `OCR_VLM_DPI=150`, один проход
 без повышения DPI даже при ошибке/пустом ответе. Это DPI рендера PDF, а не
-восстановление детализации исходного скана. KDL и Falcon далее
-применяют свои штатные image processors.
+восстановление детализации исходного скана. Перед подачей в llama.cpp действует
+общий лимит пикселей с сохранением пропорций.
 
 Paddle выдаёт OCR score. У генеративных моделей `confidence=null`,
 `needs_review=true`; это не ошибка страницы и не основание повторно вызывать
@@ -79,13 +79,10 @@ backend обрабатывает другой PDF. Для оставшегося
 | `paddle` | [PP-StructureV3](https://www.paddleocr.ai/main/en/version3.x/pipeline_usage/PP-StructureV3.html) | Девять inference-моделей Paddle из официального BOS registry |
 | `dots_mocr` | [dots-studio/dots.mocr](https://huggingface.co/dots-studio/dots.mocr) | [GGUF lodrick-the-lafted](https://huggingface.co/lodrick-the-lafted/dots.mocr-gguf), Q5_K_M, Q8_0 или BF16; mmproj Q8_0 |
 | `glm_ocr` | [zai-org/GLM-OCR](https://huggingface.co/zai-org/GLM-OCR) | [GGUF ggml-org](https://huggingface.co/ggml-org/GLM-OCR-GGUF), decoder и mmproj Q8_0 |
-| `chandra` | [datalab-to/chandra-ocr-2](https://huggingface.co/datalab-to/chandra-ocr-2) | [GGUF prithivMLmods](https://huggingface.co/prithivMLmods/chandra-ocr-2-GGUF), Q5_K_M + mmproj Q8_0 |
-| `lighton` | [lightonai/LightOnOCR-3-1B](https://huggingface.co/lightonai/LightOnOCR-3-1B) | [GGUF prithivMLmods](https://huggingface.co/prithivMLmods/LightOnOCR-3-1B-GGUF), decoder и mmproj Q8_0 |
-| `kdl` | [KDLAI/KDL-Frontier-Parser-nano](https://huggingface.co/KDLAI/KDL-Frontier-Parser-nano) | Исходные safetensors, Transformers 5.5.0 + PyTorch 2.7.1+cpu, FP32 |
 
 GGUF decoder без соответствующего vision encoder/projector не распознаёт картинки.
 Файлы разных моделей не смешиваются. В `vlm_models.py` зафиксированы HF revision,
-имена и опубликованные SHA256 основных артефактов. BF16 dots и KDL фиксируются
+имена и опубликованные SHA256 основных артефактов. BF16 dots фиксируется
 локальным manifest после подготовки; все файлы проверяются перед загрузкой.
 Смена decoder dots на BF16 не меняет точность его Q8_0 vision projector.
 
@@ -94,7 +91,7 @@ Compose собирает CPU `llama-server` из
 commit `47a39665e7081dc482feec169961acc09750a5c4`.
 CUDA отключена при сборке; runtime передаёт `--n-gpu-layers 0`,
 `--no-mmproj-offload`, `--parallel 1`, `--offline`, `--fit off`.
-Для dots.mocr, Surya и обеих моделей LightOn используется `--flash-attn auto`:
+Для dots.mocr и LightOn 0.8B используется `--flash-attn auto`:
 llama.cpp выбирает доступный режим для decoder и vision encoder, включая CPU. Остальные GGUF backend
 сохраняют `--flash-attn off`. Запрошенный режим записывается в
 `engine.flash_attention`; это не подтверждение фактического включения.
@@ -181,51 +178,6 @@ OCR_GLM_CONTEXT=131072
 занимает приблизительно 6.1 GiB, без весов, vision encoder и вычислительных буферов.
 Утверждения «10 ГБ» и «>5 ток/с» не считаются проверенным профилем приложения.
 
-### Chandra OCR 2
-
-PDF → render → multimodal decoder с официальным `ocr_layout`-промптом → HTML.
-Промпт из [chandra/prompts.py](https://github.com/datalab-to/chandra/blob/master/chandra/prompts.py)
-сохранён в `chandra_prompt.txt`. Layout-блоки используют `data-label` и
-`data-bbox` в 0–1000; корректные координаты переводятся в пиксели preview.
-HTML-таблицы очищаются и разбираются отдельно. Остальной HTML выводится как текст,
-активное содержимое не исполняется. Исходный HTML остаётся в raw-ответе.
-
-### LightOnOCR-3-1B
-
-Используется именно версия **3-1B**, а не 2-1B, 3-0.8B или 3-4B.
-Архитектура 1B совместима с предыдущей LightOnOCR-2, веса новые.
-Штатный промпт `grounding` возвращает Markdown с маркерами
-`![type](x1,y1,x2,y2)` и таблицами в HTML. Метки в диапазоне 0–1000 переводятся
-в пиксельные bbox. Содержимое после маркера связывается с соответствующим блоком.
-Неисправные bbox остаются `null`; текст сохраняется. Предобработка vision encoder
-выполняется llama.cpp; используемый DPI сохраняется в результате.
-
-### KDL-Frontier-Parser-nano
-
-Здесь используется исходный CPU checkpoint, без неподтверждённой GGUF-конверсии.
-1. Страница рендерится и приводится к RGB. Для layout создаётся изображение
-   1036×1036, как в [публичном ParseBench provider](https://github.com/run-llama/ParseBench/blob/main/src/parse_bench/inference/providers/parse/kdl_frontier_nano.py).
-2. Запрос `\nLayout Detection:\n`, greedy decoding. Специальные токены сохраняются.
-3. Разбираются `<|box_start|>x1 y1 x2 y2<|box_end|><|ref_start|>category<|ref_end|>`
-   и необязательный `<|rotate_*|>`. Координаты 0–1000 переводятся в размеры
-   исходного render, ограничиваются проверками геометрии и числа регионов.
-4. Каждый bbox вырезается из исходной страницы. При необходимости crop поворачивается.
-5. Последовательно вызываются `Text Recognition`, `Table Recognition`,
-   `Formula Recognition` или `Image Analysis` со штатными переводами строк.
-6. OTSL таблиц преобразуется в HTML. `fcel`/`ecel` создают заполненную/пустую
-   ячейку, `lcel` продолжает слева, `ucel` сверху, `xcel` в обе стороны,
-   `nl` завершает строку. Непрямоугольные/неполные объединения отклоняются.
-   Вложенные OTSL не интерпретируются; их raw сохраняется для проверки.
-7. Ошибка crop сохраняется как предупреждение; следующие регионы обрабатываются.
-   Если не распознан ни один регион, страница считается ошибочной.
-
-`enable_thinking=false`, `skip_special_tokens=false`, CPU FP32/SDPA,
-генерация с KV-cache. Контекст 8192; бюджет выхода уменьшается на длину входа.
-Число областей ограничивает `OCR_KDL_MAX_REGIONS` (150), вход vision encoder —
-`OCR_KDL_MAX_PIXELS` (1003520). Этот маршрут повторяет базовые этапы, но не все
-эвристики объединения регионов и очистки публичного benchmark provider.
-Результат рейтинга не является измеренным результатом этого приложения.
-
 ## Измерения
 
 - `document.model_load_seconds`: проверка целостности весов и запуск модели.
@@ -236,8 +188,6 @@ HTML-таблицы очищаются и разбираются отдельн�
 - `pages[].metrics.usage`: токены входа/выхода, когда runtime их сообщает.
 - `pages[].metrics.timings`: статистика llama.cpp. UI считает скорость декодирования
   как сумму `predicted_n` / сумму `predicted_ms`, а не tokens / общее время страницы.
-- KDL сохраняет число вызовов, суммарные токены и время generate; оно включает
-  prefill, поэтому UI не выдаёт его за скорость декодирования.
 
 Сравнивайте исходный PDF с результатами, особенно числа, ведущие нули,
 объединения и переносы строк. Токены у разных моделей различаются. Сумма ячеек
@@ -246,10 +196,7 @@ HTML-таблицы очищаются и разбираются отдельн�
 
 ## Лицензии
 
-dots/GLM — MIT; LightOnOCR-3 — Apache-2.0; KDL — AGPL-3.0 по карточке модели.
-Веса Chandra имеют modified OpenRAIL-M: автор ограничивает коммерческое
-использование, в том числе условиями funding/revenue и конкуренции с API.
-Исходный код Chandra — Apache-2.0; это не лицензия её весов.
+dots/GLM — MIT; LightOnOCR-3-0.8B — Apache-2.0.
 Подробности и первоисточники — [THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md).
 
 ## Дополнительные модели
@@ -257,45 +204,13 @@ dots/GLM — MIT; LightOnOCR-3 — Apache-2.0; KDL — AGPL-3.0 по карто�
 | Backend / профиль | Модель | Веса / образ |
 | --- | --- | --- |
 | `lighton_small` | [lightonai/LightOnOCR-3-0.8B](https://huggingface.co/lightonai/LightOnOCR-3-0.8B) | [prithivMLmods Q4_K_M](https://huggingface.co/prithivMLmods/LightOnOCR-3-0.8B-GGUF), прежний Q8 vision; Q8 decoder доступен для сравнения; образ `vlm` |
-| `surya` | [datalab-to/surya-ocr-2](https://huggingface.co/datalab-to/surya-ocr-2) | [Официальный GGUF](https://huggingface.co/datalab-to/surya-ocr-2-gguf), decoder и mmproj F16; образ `vlm` |
-| `falcon` | [tiiuae/Falcon-OCR](https://huggingface.co/tiiuae/Falcon-OCR), v1.5 | Исходные safetensors, FP32; отдельный образ `falcon` |
 
 ### LightOnOCR-3-0.8B
 
-По умолчанию: prithivMLmods Q4_K_M, пустой промпт, до восьми физических ядер.
+По умолчанию: prithivMLmods Q4_K_M, пустой промпт и автоматический бюджет CPU
+с резервом физического ядра для системы.
 [Параметры, веса и проверка](lighton-q4.md).
 
-Самостоятельный checkpoint на базе Qwen3.5. Он не использует decoder или projector
-версии 1B. Маршрут: render → llama.cpp → transcription либо grounding → Markdown/HTML.
-Нормализованные bbox доступны в grounding. Адаптер общий с 1B, веса и сервисы разные.
-
-### Surya OCR 2
-
-Вместо `onnx-community/Surya-Ocr-2-Onnx`, где нет опубликованных ONNX-весов,
-подключена выбранная исходная модель Datalab. Используется её официальный
-F16 GGUF-runtime на CPU, не ONNX и не сторонняя модель.
-Промпт запрашивает HTML: div с `data-label`, `data-bbox` (0–1000) и содержимым.
-Адаптер переводит bbox в пиксели и разбирает HTML-таблицы, как для Chandra.
-Это один вызов на страницу; дополнительные crop-проходы полного Surya SDK
-не воспроизводятся. Код Apache-2.0; веса имеют modified OpenRAIL с условиями
-коммерческого использования, включая порог funding/revenue $5M; см. карточку.
-
-### Falcon-OCR 1.5
-
-Оригинальная реализация использует Triton, FlexAttention и CUDA-оптимизацию.
-Для CPU подготовлена отдельная адаптация локальной копии pinned Python-кода:
-
-1. Triton gate заменяется эквивалентным `ReLU(gate)^2 * up` для interleaved весов.
-2. Attention вычисляется обычным PyTorch по блокам из 64 query-позиций.
-   Сохраняются causal/document/left-pad/image-prefix masks и sink scaling.
-3. Неиспользуемый GPU layout loader исключается. Второй checkpoint layout
-   не загружается. Вызывается штатный whole-page `generate`, `category=plain`,
-   greedy, seed 42, `compile=false`, максимальная сторона 1024.
-4. Исходные веса остаются неизменными и проверяются manifest; модифицированный
-   код находится в `/data/cache`, отдельно от read-only snapshot.
-
-CPU-математика проверена тестами относительно PyTorch SDPA. Полный запуск
-с настоящими весами **не проверен** из-за блокировки загрузки; CPU-порт нельзя
-считать подтверждённым результатом рейтинга. Уменьшение страницы до 1024 может
-ухудшать мелкий текст. Upstream `generate` не сообщает причину завершения,
-поэтому raw содержит `finish_reason=unknown` и предупреждение. Лицензия Apache-2.0.
+Самостоятельный checkpoint на базе Qwen3.5.
+Маршрут: render → llama.cpp → transcription либо grounding → Markdown/HTML.
+Нормализованные bbox доступны в grounding.

@@ -12,26 +12,15 @@ dependencies = [
   "lxml>=5.3,<7",
   "pyyaml>=6,<7",
   "numpy>=1.26,<2.3",
-  "huggingface-hub>=1.24,<2",
   "markdown-it-py==4.2.0",
 ]
 
 [project.optional-dependencies]
-kdl = ["torch==2.7.1+cpu", "transformers==5.5.0", "pillow>=11,<13"]
-falcon = ["torch==2.7.1+cpu", "transformers==5.5.0", "pillow>=11,<13", "einops>=0.8,<1", "requests>=2.32.5,<3"]
 ocr = [
   "paddleocr==3.3.2",
   "paddlex[ocr]==3.3.13",
   "paddlepaddle==3.2.2",
 ]
-
-[[tool.uv.index]]
-name = "pytorch-cpu"
-url = "https://download.pytorch.org/whl/cpu"
-explicit = true
-
-[tool.uv.sources]
-torch = { index = "pytorch-cpu" }
 
 [dependency-groups]
 dev = ["pytest>=8.3,<10", "httpx==0.28.1", "ruff>=0.11,<1", "pyyaml>=6,<7"]

@@ -34,15 +34,6 @@ def artifacts(backend: str, settings: Settings) -> dict:
             }[settings.lighton_small_quantization],
             "a8b9b3b01b6c780747b48e0807ef5b753c54f27aa4c23962c3c7d5ace2ed0233",
         ),
-        "surya": (
-            "datalab-to/surya-ocr-2-gguf",
-            "6a3a4c30e5e74446d4f8b6afd05b2f2da970f470",
-            "F16",
-            "surya-2.gguf",
-            "surya-2-mmproj.gguf",
-            "1f18abe17b1ed8b4e47ee9b1ad0e274c93daf5efbb6b29a04ff1712e37051e05",
-            "98c0563673b1657ff6d021d1e5f04af06cbf61bb40c63ac613e8bb71b42fb2c0",
-        ),
     }
     if backend in additional:
         repo, revision, quant, model, projector, model_hash, projector_hash = additional[backend]
@@ -53,38 +44,6 @@ def artifacts(backend: str, settings: Settings) -> dict:
             "model": model,
             "projector": projector,
             "files": {model: model_hash, projector: projector_hash},
-        }
-    if backend in {"chandra", "lighton"}:
-        if backend == "chandra":
-            repo, revision, quant, name = (
-                "prithivMLmods/chandra-ocr-2-GGUF",
-                "85cc7b75893f81669d6751ba6d31c718c7c98e1d",
-                "Q5_K_M",
-                "chandra-ocr-2",
-            )
-            hashes = (
-                "c5e3df32bfa20d0a822fdc635d3849f5d53e2049535cd85753df4fd762bdd276",
-                "709be8aeda77c5732e58e957367439eae14ebb73b4f4a78b558013d000948bc3",
-            )
-        else:
-            repo, revision, quant, name = (
-                "prithivMLmods/LightOnOCR-3-1B-GGUF",
-                "ff5c331ec2cfee9de1c8054c21ccf88b8c5b0faa",
-                "Q8_0",
-                "LightOnOCR-3-1B",
-            )
-            hashes = (
-                "2cf9771aaf236a1c25f389a344510c9ad4daa863e5fdd82651cf7d7834fede1c",
-                "7bbf40e6f3e91626843fdcbba67c7fe774821f3f0c537dcc8c769026a528839a",
-            )
-        model, projector = f"{name}.{quant}.gguf", f"{name}.mmproj-q8_0.gguf"
-        return {
-            "repo": repo,
-            "revision": revision,
-            "quantization": quant,
-            "model": model,
-            "projector": projector,
-            "files": dict(zip((model, projector), hashes, strict=True)),
         }
     if backend == "dots_mocr":
         quant = settings.dots_quantization

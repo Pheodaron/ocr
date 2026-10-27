@@ -53,22 +53,6 @@ services:
       timeout: 5s
       retries: 3
 
-  models-paddle:
-    image: localhost/document-ocr-api:0.1.0
-    build:
-      context: .
-      dockerfile: Containerfile
-      target: api
-    command: [ocr-service, prepare-models]
-    volumes: ['models:/models']
-    restart: 'no'
-    profiles: [paddle]
-    environment:
-      OCR_DATA_DIR: /data
-      OCR_MODELS_DIR: /models
-      OCR_ENABLED_BACKENDS: paddle
-      OCR_ALLOW_MODEL_DOWNLOAD: ${OCR_ALLOW_MODEL_DOWNLOAD:-true}
-
   paddle:
     image: localhost/document-ocr-paddle:0.1.0
     build:
@@ -76,7 +60,7 @@ services:
       dockerfile: Containerfile
       target: paddle
     command: [ocr-service, worker]
-    volumes: ['data:/data', 'models:/models:ro']
+    volumes: ['data:/data', '${OCR_MODELS_DIR:-./models}:/models:ro,z']
     network_mode: none
     init: true
     shm_size: 512mb
@@ -96,26 +80,6 @@ services:
       OCR_REVIEW_THRESHOLD: ${OCR_REVIEW_THRESHOLD:-0.75}
       OCR_LAYOUT_THRESHOLD: ${OCR_LAYOUT_THRESHOLD:-0.5}
       OCR_MAX_PAGE_PIXELS: ${OCR_MAX_PAGE_PIXELS:-30000000}
-    depends_on:
-      models-paddle:
-        condition: service_completed_successfully
-
-  models-dots-mocr:
-    image: localhost/document-ocr-api:0.1.0
-    build:
-      context: .
-      dockerfile: Containerfile
-      target: api
-    command: [ocr-service, prepare-models]
-    volumes: ['models:/models']
-    restart: 'no'
-    profiles: [dots_mocr]
-    environment:
-      OCR_DATA_DIR: /data
-      OCR_MODELS_DIR: /models
-      OCR_ENABLED_BACKENDS: dots_mocr
-      OCR_ALLOW_MODEL_DOWNLOAD: ${OCR_ALLOW_MODEL_DOWNLOAD:-true}
-      OCR_DOTS_QUANTIZATION: ${OCR_DOTS_QUANTIZATION:-Q5_K_M}
 
   dots-mocr:
     image: localhost/document-ocr-vlm:0.1.0
@@ -124,7 +88,7 @@ services:
       dockerfile: Containerfile
       target: vlm
     command: [ocr-service, worker]
-    volumes: ['data:/data', 'models:/models:ro']
+    volumes: ['data:/data', '${OCR_MODELS_DIR:-./models}:/models:ro,z']
     network_mode: none
     init: true
     shm_size: 512mb
@@ -149,25 +113,6 @@ services:
       OCR_DOTS_QUANTIZATION: ${OCR_DOTS_QUANTIZATION:-Q5_K_M}
       OCR_DOTS_CONTEXT: ${OCR_DOTS_CONTEXT:-32768}
       OCR_DOTS_MAX_PIXELS: ${OCR_DOTS_MAX_PIXELS:-2500000}
-    depends_on:
-      models-dots-mocr:
-        condition: service_completed_successfully
-
-  models-glm-ocr:
-    image: localhost/document-ocr-api:0.1.0
-    build:
-      context: .
-      dockerfile: Containerfile
-      target: api
-    command: [ocr-service, prepare-models]
-    volumes: ['models:/models']
-    restart: 'no'
-    profiles: [glm_ocr]
-    environment:
-      OCR_DATA_DIR: /data
-      OCR_MODELS_DIR: /models
-      OCR_ENABLED_BACKENDS: glm_ocr
-      OCR_ALLOW_MODEL_DOWNLOAD: ${OCR_ALLOW_MODEL_DOWNLOAD:-true}
 
   glm-ocr:
     image: localhost/document-ocr-vlm:0.1.0
@@ -176,7 +121,7 @@ services:
       dockerfile: Containerfile
       target: vlm
     command: [ocr-service, worker]
-    volumes: ['data:/data', 'models:/models:ro']
+    volumes: ['data:/data', '${OCR_MODELS_DIR:-./models}:/models:ro,z']
     network_mode: none
     init: true
     shm_size: 512mb
@@ -200,26 +145,6 @@ services:
       OCR_KV_CACHE_TYPE: ${OCR_KV_CACHE_TYPE:-q8_0}
       OCR_GLM_CONTEXT: ${OCR_GLM_CONTEXT:-16384}
       OCR_GLM_TASK: ${OCR_GLM_TASK:-text}
-    depends_on:
-      models-glm-ocr:
-        condition: service_completed_successfully
-
-  models-lighton-small:
-    image: localhost/document-ocr-api:0.1.0
-    build:
-      context: .
-      dockerfile: Containerfile
-      target: api
-    command: [ocr-service, prepare-models]
-    volumes: ['models:/models']
-    restart: 'no'
-    profiles: [lighton_small]
-    environment:
-      OCR_DATA_DIR: /data
-      OCR_MODELS_DIR: /models
-      OCR_ENABLED_BACKENDS: lighton_small
-      OCR_ALLOW_MODEL_DOWNLOAD: ${OCR_ALLOW_MODEL_DOWNLOAD:-true}
-      OCR_LIGHTON_SMALL_QUANTIZATION: ${OCR_LIGHTON_SMALL_QUANTIZATION:-Q4_K_M}
 
   lighton-small:
     image: localhost/document-ocr-vlm:0.1.0
@@ -228,7 +153,7 @@ services:
       dockerfile: Containerfile
       target: vlm
     command: [ocr-service, worker]
-    volumes: ['data:/data', 'models:/models:ro']
+    volumes: ['data:/data', '${OCR_MODELS_DIR:-./models}:/models:ro,z']
     network_mode: none
     init: true
     shm_size: 512mb
@@ -254,10 +179,6 @@ services:
       OCR_LIGHTON_SMALL_TASK: ${OCR_LIGHTON_SMALL_TASK:-transcription}
       OCR_LIGHTON_SMALL_THREADS: ${OCR_LIGHTON_SMALL_THREADS:-auto}
       OCR_LIGHTON_SMALL_PIN_THREADS: ${OCR_LIGHTON_SMALL_PIN_THREADS:-true}
-    depends_on:
-      models-lighton-small:
-        condition: service_completed_successfully
 
 volumes:
   data: null
-  models: null

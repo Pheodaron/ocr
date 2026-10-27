@@ -16,9 +16,12 @@ JSON, Markdown и HTML. Русский и английский. Веб-клие�
 потребление RAM и скорость нужно измерить на ваших документах.
 
 ```sh
-# Общий API и только GLM-OCR; остальные модели не запускаются и не скачиваются.
+# Скачать веса в общий каталог на хосте (один раз).
+mise install
+mise run models
+# Общий API и только GLM-OCR.
 podman compose --profile glm_ocr up --build -d
-podman compose logs -f models-glm-ocr glm-ocr
+podman compose --profile glm_ocr logs -f glm-ocr
 ```
 
 Клиент: **http://localhost:8000**. Справка: **http://localhost:8000/docs**.
@@ -40,8 +43,9 @@ podman compose logs -f models-glm-ocr glm-ocr
 Прежние результаты удалённых провайдеров остаются доступными; их записи
 в старом списке `OCR_ENABLED_BACKENDS` игнорируются.
 
-У каждого профиля свой `models-*` для подготовки только его весов. Runtime-сервисы
-не скачивают модели. Образы API, VLM и Paddle разделены; VLM не устанавливает Paddle. У всех сервисов общие данные и общий каталог весов, но разные
+Веса готовятся отдельно: `mise r models` для всех или `mise r models glm_ocr`
+для выбранного провайдера. Общий каталог `OCR_MODELS_DIR` (по умолчанию `./models`)
+подключён к каждому worker только для чтения. Runtime-сервисы не скачивают модели. Образы API, VLM и Paddle разделены; VLM не устанавливает Paddle. У всех сервисов общие данные и общий каталог весов, но разные
 очереди заданий и блокировки по backend.
 
 В компактной форме выберите одного провайдера OCR: список показывает его
@@ -84,10 +88,10 @@ PDF в RGB при конкретном DPI и размере, сохранени
 
 ```sh
 # Дождитесь окончания прогона GLM в клиенте, затем:
-podman compose stop glm-ocr
+podman compose --profile glm_ocr stop glm-ocr
 podman compose --profile dots_mocr up --build -d
 # После прогона dots:
-podman compose stop dots-mocr
+podman compose --profile dots_mocr stop dots-mocr
 podman compose --profile lighton_small up --build -d
 ```
 
@@ -102,26 +106,25 @@ podman compose --profile lighton_small up --build -d
 `.env.example` в `.env`. Например, `OCR_CPU_THREADS=2` и `OCR_PORT=8080`.
 
 ```sh
-podman compose down
+podman compose --profile '*' down
 ```
 
-Остановка сохраняет именованные тома с моделями и данными. `down -v` удаляет
-эти тома вместе с результатами. В этой версии автоматической очистки нет.
+Остановка сохраняет том `data` и каталог `models` на хосте. `down -v` удаляет
+том с документами и результатами; каталог весов остаётся.
 
 ## Что запускается
 
 В `compose.yaml` каждый сервис описан явно: свой образ, команда, тома,
 зависимости и список переменных окружения. YAML-якорей и общих скрытых
-объединений нет. У worker перечислены параметры его модели; `models-*`
-получают параметры подготовки соответствующих весов. Переменные `api`
+объединений нет. У worker перечислены параметры его модели. Переменные `api`
 содержат настройки веб-сервиса и распознавания, фиксируемые при создании заданий.
 
 - `api`: FastAPI/Uvicorn на localhost; веб-страница без CDN и без весов.
 - `paddle`, `dots-mocr`, `glm-ocr`, `lighton-small`: независимые
   OCR-сервисы в своих профилях. У каждого `network_mode: none`, свой heartbeat,
   свой backend-фильтр очереди и один распознаваемый документ одновременно.
-- `models-*`: одноразовая подготовка весов соответствующего сервиса.
-- Постоянные тома `data` и `models`. SQLite размещается на локальном Linux-диске,
+- `mise r models [backend ...]`: подготовка весов на хосте.
+- Постоянный том `data` и общий каталог весов `./models`. SQLite размещается на локальном Linux-диске,
   а не на NFS/SMB.
 
 Каждый сервис запускает документ в отдельном процессе; после документа процесс

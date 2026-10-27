@@ -65,8 +65,9 @@ DPI, размер страницы, контекст и лимит ответа 
 
 ```sh
 git pull --ff-only origin work
+mise r models lighton_small
 podman compose --profile lighton_small up --build --force-recreate -d
-podman compose --profile lighton_small logs -f models-lighton-small lighton-small
+podman compose --profile lighton_small logs -f lighton-small
 ```
 
 Загрузите PDF заново. Старые задания без новых полей сохраняют Q8 decoder

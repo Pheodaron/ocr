@@ -13,7 +13,7 @@ Podman/mise здесь не установлены; контейнерная п�
 - Ruff lint/format, `node --check`, `git diff --check`.
 - `uv.lock`: разрешены CPU-зависимости; Nemotron отделён от KDL/Falcon из-за
   разных версий PyTorch/Transformers.
-- Compose-конфигурация всех 11 профилей; у каждого собственные worker и models-init.
+- Compose-конфигурация четырёх профилей; у каждого свой worker и общий каталог весов с хоста.
 - Сборки targets `api`, `vlm`, `paddle`, `kdl`, `jina`, `falcon`, `nemotron`.
   Jina действительно компилирует отдельный бинарник с RoPE-поправкой.
 - Nemotron: импорт torch 2.11.0+cpu / torchvision 0.26.0+cpu / timm 1.0.22 и

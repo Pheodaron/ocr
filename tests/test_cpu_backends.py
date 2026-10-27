@@ -22,7 +22,7 @@ def test_markdown_tables_preserve_zeros_empty_cells_and_escaped_pipes():
     ]
 
 
-def test_every_catalog_model_has_its_own_compose_service_and_preparation():
+def test_every_catalog_model_has_its_own_offline_service_and_shared_host_models():
     from pathlib import Path
 
     import yaml
@@ -31,6 +31,8 @@ def test_every_catalog_model_has_its_own_compose_service_and_preparation():
 
     compose = yaml.safe_load((Path(__file__).parents[1] / "compose.yaml").read_text())
     services = compose["services"]
+    assert set(services) == {"api", "paddle", "dots-mocr", "glm-ocr", "lighton-small"}
+    assert set(compose["volumes"]) == {"data"}
     for backend in LABELS:
         workers = [
             (name, value)
@@ -38,7 +40,8 @@ def test_every_catalog_model_has_its_own_compose_service_and_preparation():
             if value.get("environment", {}).get("OCR_WORKER_BACKEND") == backend
         ]
         assert len(workers) == 1
-        name, worker = workers[0]
+        _name, worker = workers[0]
         assert worker["profiles"] == [backend]
         assert worker["network_mode"] == "none"
-        assert services[f"models-{name}"]["environment"]["OCR_ENABLED_BACKENDS"] == backend
+        assert "depends_on" not in worker
+        assert "${OCR_MODELS_DIR:-./models}:/models:ro,z" in worker["volumes"]

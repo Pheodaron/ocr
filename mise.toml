@@ -7,8 +7,8 @@ description = "Установить зависимости, включая CPU O
 run = "uv sync --frozen --extra ocr"
 
 [tasks.models]
-description = "Подготовить модели (требуется сеть при первом запуске)"
-run = "uv run --frozen ocr-service prepare-models --download"
+description = "Скачать все модели в ./models; можно указать backend аргументом"
+run = "scripts/models.sh"
 
 [tasks.api]
 description = "Запустить API и веб-клиент на localhost:8000"
@@ -24,7 +24,7 @@ run = 'podman compose --profile "${OCR_WORKER_BACKEND:-glm_ocr}" up --build -d'
 
 [tasks.down]
 description = "Остановить приложение, сохранив данные и модели"
-run = "podman compose down"
+run = 'podman compose --profile "*" down'
 
 [tasks.test]
 description = "Проверить API, очередь, повторы и частичные результаты"

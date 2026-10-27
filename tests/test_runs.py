@@ -305,7 +305,7 @@ def test_compose_services_are_explicit_and_environment_matches_the_model():
     compose = yaml.safe_load(text)
     assert not any(key.startswith("x-") for key in compose)
     services = compose["services"]
-    assert len(services) == 1 + len(LABELS) * 2
+    assert len(services) == 1 + len(LABELS)
     for name, service in services.items():
         assert "build" in service and "image" in service
         env = service["environment"]
@@ -326,7 +326,5 @@ def test_compose_services_are_explicit_and_environment_matches_the_model():
         ):
             if backend != owner:
                 assert not any(key.startswith(prefix) for key in env)
-        if not name.startswith("models-"):
-            assert env["OCR_WORKER_BACKEND"] == backend
-            assert service["network_mode"] == "none"
-            assert services["models-" + name]["build"]["target"] == "api"
+        assert env["OCR_WORKER_BACKEND"] == backend
+        assert service["network_mode"] == "none"

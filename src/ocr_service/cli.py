@@ -4,6 +4,7 @@ import os
 import sys
 from pathlib import Path
 
+from .catalog import LABELS
 from .config import Settings
 
 
@@ -24,10 +25,23 @@ def main() -> None:
         default=os.environ.get("OCR_ALLOW_MODEL_DOWNLOAD", "false").lower() == "true",
         help="Explicitly allow model downloads",
     )
+    prepare.add_argument(
+        "backends",
+        nargs="*",
+        metavar="BACKEND",
+        help="Models to prepare: " + ", ".join(LABELS) + " (default: all)",
+    )
     prepare.add_argument("--import-from", type=Path, help="Copy a prepared offline model directory")
     commands.add_parser("check-models", help="Check all model files and SHA256 hashes offline")
     args = parser.parse_args()
-    settings = Settings()
+    if args.command == "prepare-models":
+        selected = args.backends or list(LABELS)
+        unknown = set(selected) - LABELS.keys()
+        if unknown:
+            parser.error("Unknown backend: " + ", ".join(sorted(unknown)))
+        settings = Settings(enabled_backends=",".join(dict.fromkeys(selected)))
+    else:
+        settings = Settings()
     if args.command == "api":
         import uvicorn
 

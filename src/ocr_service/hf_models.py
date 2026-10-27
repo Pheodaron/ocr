@@ -10,7 +10,6 @@ from .models import ModelsUnavailable, sha256_file
 
 SPECS = {
     "falcon": ("tiiuae/Falcon-OCR", "fe757d59ecd79d4d68760162306a70a015761ad9"),
-    "nemotron": ("nvidia/Nemotron-3.5-Parse", "41897c0ae2fe5d9b461b207bb13587ed54d2740c"),
 }
 
 

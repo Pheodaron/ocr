@@ -1,9 +1,5 @@
 import ast
-import sys
-from types import SimpleNamespace
-from unittest.mock import Mock
 
-import numpy as np
 import pytest
 
 from ocr_service.falcon import patch_model_source
@@ -70,69 +66,20 @@ class Model:
 
 
 def test_pinned_hf_snapshot_checks_code_as_well_as_weights(settings):
-    directory = settings.models_dir / "nemotron"
+    directory = settings.models_dir / "falcon"
     directory.mkdir(parents=True)
     for name in ("config.json", "tokenizer_config.json", "model.safetensors", "modeling.py"):
         (directory / name).write_text("fixture")
-    manifest = prepare_hf("nemotron", settings)
-    assert manifest == verify_hf("nemotron", settings)
+    manifest = prepare_hf("falcon", settings)
+    assert manifest == verify_hf("falcon", settings)
     (directory / "modeling.py").write_text("changed code")
     with pytest.raises(ModelsUnavailable, match="SHA256"):
-        verify_hf("nemotron", settings)
-
-
-def test_nemotron_cpu_contract_preserves_indices_and_upstream_postprocessing(settings, monkeypatch):
-    torch = pytest.importorskip("torch")
-    from ocr_service import nemotron
-
-    class Batch(dict):
-        def to(self, device):
-            assert device == "cpu"
-            return self
-
-    class Processor:
-        def __call__(self, **kwargs):
-            assert kwargs["text"] == nemotron.PROMPT
-            assert kwargs["images"][0].size == (30, 20)
-            return Batch(input_ids=torch.tensor([[1, 2]]), pixel_values=torch.ones(1).half())
-
-        def batch_decode(self, output, **kwargs):
-            return ["serialized fixture"]
-
-    model = Mock()
-    model.to.return_value.eval.return_value = model
-    model.generate.return_value = torch.tensor([[1, 2, 3]])
-    transformers = SimpleNamespace(
-        AutoModel=Mock(from_pretrained=Mock(return_value=model)),
-        AutoProcessor=Mock(from_pretrained=Mock(return_value=Processor())),
-        GenerationConfig=Mock(from_pretrained=Mock(return_value=SimpleNamespace(eos_token_id=3))),
-    )
-    monkeypatch.setitem(sys.modules, "transformers", transformers)
-    monkeypatch.setitem(
-        sys.modules,
-        "postprocessing",
-        SimpleNamespace(
-            postprocess_document=lambda text, image_size: {
-                "markdown": "<table><tr><td>00125</td></tr></table>",
-                "blocks": [],
-            },
-        ),
-    )
-    monkeypatch.setattr(nemotron, "verify_hf", lambda *_: {"fixture": True})
-    engine = nemotron.NemotronEngine(settings)
-    prediction = engine.recognize(np.zeros((20, 30, 3), dtype=np.uint8))
-    arguments = model.generate.call_args.kwargs
-    assert arguments["input_ids"].dtype == torch.int64
-    assert arguments["pixel_values"].dtype == torch.float32
-    assert transformers.AutoModel.from_pretrained.call_args.kwargs["local_files_only"]
-    page = adapt_vlm(prediction.raw, 1, 250, 30, 20)
-    assert page.tables[0].cells[0].text == "00125"
-    assert page.confidence is None
+        verify_hf("falcon", settings)
 
 
 def test_markdown_tables_preserve_zeros_empty_cells_and_escaped_pipes():
     raw = {
-        "ocr_backend": "jina",
+        "ocr_backend": "glm_ocr",
         "choices": [
             {
                 "finish_reason": "stop",

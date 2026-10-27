@@ -5,7 +5,7 @@
 ```dotenv
 OCR_LIGHTON_SMALL_QUANTIZATION=Q4_K_M
 OCR_LIGHTON_SMALL_TASK=transcription
-OCR_LIGHTON_SMALL_THREADS=8
+OCR_LIGHTON_SMALL_THREADS=auto
 OCR_LIGHTON_SMALL_PIN_THREADS=true
 ```
 
@@ -29,27 +29,22 @@ Runtime работает без сети и только проверяет ло
 
 ## CPU
 
-Для `lighton_small` отдельный лимит `OCR_LIGHTON_SMALL_THREADS` равен 8,
-допустимы значения 1–8. Он задаёт и `--threads`, и `--threads-batch`, включая
-число потоков vision encoder. Глобальное `OCR_CPU_THREADS=20` этот лимит
-не переопределяет. Остальные backend используют прежние настройки.
+`OCR_LIGHTON_SMALL_THREADS=auto` использует общий механизм выбора CPU:
+разрешённые логические потоки, SMT, видимые квоты cgroup и резерв
+`OCR_CPU_RESERVE_CORES=1` для системы. Ручное число потоков является верхним
+пределом; прежнего ограничения 1–8 больше нет. `OCR_CPU_THREADS` задаёт
+бюджет остальных моделей.
 
-При pinning выбирается по одному разрешённому логическому CPU на каждую
-пару `(physical_package_id, core_id)` через Linux sysfs с учётом
-`sched_getaffinity`. CPU с общим физическим ядром повторно не выбираются.
-Процесс llama-server и его потоки наследуют полученную маску. Для decoder
-дополнительно задаются `--cpu-mask`, `--cpu-strict 1` и соответствующие batch
-параметры. В закреплённой версии нет `--pin-threads yes`.
+Маска исключает все SMT-потоки зарезервированного физического ядра. Оставшиеся
+физические ядра заполняются перед добавлением их SMT-потоков. Дочерний процесс
+инференса получает `nice=10`; OMP/MKL/OpenBLAS/NumExpr/Rayon используют тот же
+бюджет. Decoder и обработка изображения получают одинаковые `--threads` и
+`--threads-batch`.
 
-В окружении llama-server устанавливаются OMP/MKL/OpenBLAS/NumExpr/Rayon
-лимиты. Если контейнеру доступны менее восьми физических ядер, используется
-меньшее число. Если topology недоступна, остаётся лимит потоков, а в журнале
-будет предупреждение об отсутствии физической привязки. Отключение pinning:
-`OCR_LIGHTON_SMALL_PIN_THREADS=false`.
-
-Фактические потоки и CPU записываются в `engine.cpu_threads` и
-`engine.cpu_affinity`. Это ограничивает использование Hyper-Threading данным
-процессом, не отключая его в BIOS или во всей системе.
+`OCR_LIGHTON_SMALL_PIN_THREADS=false` отключает дополнительные CPU-mask флаги
+llama.cpp для этой модели; общий резерв процесса при этом сохраняется.
+Фактический бюджет записывается в `engine.cpu_threads`, `engine.cpu_affinity`
+и `engine.cpu_policy`. Подробнее: [настройки CPU](../README.md#локальная-разработка-с-mise).
 
 ## Промпт и результат
 

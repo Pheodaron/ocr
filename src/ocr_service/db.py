@@ -3,6 +3,7 @@ import sqlite3
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
+from uuid import uuid4
 
 from .backends import configuration_details
 from .schemas import JobSummary, PageResult
@@ -68,6 +69,22 @@ class Database:
                     job_id TEXT,
                     error TEXT
                 );
+                CREATE TABLE IF NOT EXISTS runs (
+                    id TEXT PRIMARY KEY,
+                    backend TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS run_files (
+                    run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+                    position INTEGER NOT NULL,
+                    filename TEXT NOT NULL,
+                    job_id TEXT REFERENCES jobs(id) ON DELETE SET NULL,
+                    status TEXT NOT NULL DEFAULT 'pending',
+                    error TEXT,
+                    PRIMARY KEY(run_id, position),
+                    UNIQUE(job_id)
+                );
+                CREATE INDEX IF NOT EXISTS runs_created ON runs(created_at DESC, id DESC);
             """)
             db.execute("BEGIN IMMEDIATE")
             columns = {row["name"] for row in db.execute("PRAGMA table_info(jobs)")}
@@ -82,6 +99,29 @@ class Database:
                 if name not in columns:
                     db.execute(f"ALTER TABLE jobs ADD COLUMN {name} {definition}")
             db.execute("CREATE INDEX IF NOT EXISTS jobs_comparison ON jobs(comparison_id)")
+            # Earlier versions did not save upload groups. Preserve standalone jobs
+            # and the comparison groups that can be recovered without guessing.
+            legacy = db.execute(
+                "SELECT j.* FROM jobs j WHERE NOT EXISTS "
+                "(SELECT 1 FROM run_files f WHERE f.job_id=j.id) ORDER BY j.created_at,j.id"
+            ).fetchall()
+            for job in legacy:
+                run_id = job["comparison_id"] or job["id"]
+                db.execute(
+                    "INSERT OR IGNORE INTO runs VALUES (?,?,?)",
+                    (
+                        run_id,
+                        "comparison" if job["comparison_id"] else job["backend"],
+                        job["created_at"],
+                    ),
+                )
+                position = db.execute(
+                    "SELECT COUNT(*) FROM run_files WHERE run_id=?", (run_id,)
+                ).fetchone()[0]
+                db.execute(
+                    "INSERT INTO run_files VALUES (?,?,?,?,'accepted',NULL)",
+                    (run_id, position, job["filename"], job["id"]),
+                )
 
     def create_job(
         self,
@@ -110,7 +150,19 @@ class Database:
     def create_jobs(self, jobs: list[dict]) -> None:
         # Publish a complete comparison atomically; the worker cannot claim half a batch.
         with self.connect() as db:
-            for job in jobs:
+            implicit = [job for job in jobs if not job.get("run_id")]
+            run_id = uuid4().hex
+            if implicit:
+                backends = {job["backend"] for job in implicit}
+                db.execute(
+                    "INSERT INTO runs VALUES (?,?,?)",
+                    (
+                        run_id,
+                        next(iter(backends)) if len(backends) == 1 else "comparison",
+                        now(),
+                    ),
+                )
+            for index, job in enumerate(jobs):
                 timestamp = now()
                 db.execute(
                     "INSERT INTO jobs "
@@ -132,6 +184,114 @@ class Database:
                     "INSERT INTO pages(job_id,number) VALUES (?,?)",
                     [(job["id"], number) for number in range(1, job["pages"] + 1)],
                 )
+                if job.get("run_id"):
+                    updated = db.execute(
+                        "UPDATE run_files SET job_id=?,status='accepted',error=NULL "
+                        "WHERE run_id=? AND position=? AND job_id IS NULL AND status!='accepted'",
+                        (job["id"], job["run_id"], job["file_index"]),
+                    )
+                    if updated.rowcount != 1:
+                        raise ValueError("Файл запуска уже загружен или не найден")
+                else:
+                    db.execute(
+                        "INSERT INTO run_files VALUES (?,?,?,?,'accepted',NULL)",
+                        (run_id, index, job["filename"], job["id"]),
+                    )
+
+    def create_run(self, backend: str, filenames: list[str]) -> str:
+        run_id = uuid4().hex
+        with self.connect() as db:
+            db.execute("INSERT INTO runs VALUES (?,?,?)", (run_id, backend, now()))
+            db.executemany(
+                "INSERT INTO run_files(run_id,position,filename) VALUES (?,?,?)",
+                [(run_id, index, filename) for index, filename in enumerate(filenames)],
+            )
+        return run_id
+
+    def run_file(self, run_id: str, position: int) -> dict | None:
+        with self.connect() as db:
+            row = db.execute(
+                "SELECT f.*,r.backend FROM run_files f JOIN runs r ON r.id=f.run_id "
+                "WHERE f.run_id=? AND f.position=?",
+                (run_id, position),
+            ).fetchone()
+            return dict(row) if row else None
+
+    def finish_run_upload(self, run_id: str, failures: list[dict]) -> None:
+        with self.connect() as db:
+            for failure in failures:
+                db.execute(
+                    "UPDATE run_files SET status='failed',error=? "
+                    "WHERE run_id=? AND position=? AND job_id IS NULL AND status!='accepted'",
+                    (failure["error"], run_id, failure["position"]),
+                )
+            db.execute(
+                "UPDATE run_files SET status='failed',error='Файл не был загружен' "
+                "WHERE run_id=? AND status='pending'",
+                (run_id,),
+            )
+
+    def runs(self, limit: int = 20, offset: int = 0) -> dict:
+        with self.connect() as db:
+            rows = db.execute(
+                "SELECT r.*,COUNT(f.position) AS total,"
+                "SUM(f.status='pending') AS pending,"
+                "SUM(f.job_id IS NOT NULL AND j.delete_requested=0) AS accepted,"
+                "SUM(j.delete_requested=0 AND j.status IN "
+                "('completed','partial','failed','cancelled')) AS finished,"
+                "SUM(f.status='failed' OR (f.status='accepted' AND "
+                "(f.job_id IS NULL OR j.delete_requested=1)) "
+                "OR j.status IN ('failed','partial')) AS errors,"
+                "SUM(j.status IN ('processing','cancelling')) AS processing,"
+                "SUM(j.status='queued') AS queued "
+                "FROM runs r JOIN run_files f ON f.run_id=r.id LEFT JOIN jobs j ON j.id=f.job_id "
+                "GROUP BY r.id ORDER BY r.created_at DESC,r.id DESC LIMIT ? OFFSET ?",
+                (limit + 1, offset),
+            ).fetchall()
+        items = []
+        for row in rows[:limit]:
+            item = dict(row)
+            for key in ("pending", "accepted", "finished", "errors", "processing", "queued"):
+                item[key] = item[key] or 0
+            item["status"] = (
+                "processing"
+                if item["processing"]
+                else "queued"
+                if item["queued"]
+                else "pending"
+                if item["pending"]
+                else "partial"
+                if item["errors"] and item["accepted"] and item["errors"] < item["total"]
+                else "failed"
+                if item["errors"]
+                else "completed"
+            )
+            items.append(item)
+        return {"runs": items, "has_more": len(rows) > limit}
+
+    def run_details(self, run_id: str) -> dict | None:
+        with self.connect() as db:
+            run = db.execute("SELECT * FROM runs WHERE id=?", (run_id,)).fetchone()
+            if run is None:
+                return None
+            rows = db.execute(
+                "SELECT * FROM run_files WHERE run_id=? ORDER BY position",
+                (run_id,),
+            ).fetchall()
+        files = []
+        for row in rows:
+            item = dict(row)
+            job = self.get_job(item["job_id"]) if item["job_id"] else None
+            item["job"] = None
+            if job and not job["delete_requested"]:
+                try:
+                    item["job"] = self.summary(job["id"]).model_dump(mode="json")
+                except KeyError:
+                    pass
+            if item["status"] == "accepted" and item["job"] is None:
+                item.update(status="deleted", error="Документ удалён")
+            files.append(item)
+        return {**dict(run), "files": files}
 
     def get_job(self, job_id: str) -> dict | None:
         with self.connect() as db:

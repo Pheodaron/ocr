@@ -1,4 +1,4 @@
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, Field
 
@@ -101,3 +101,38 @@ class WorkerStatus(BaseModel):
     job_id: str | None = None
     error: str | None = None
     ready: bool = False
+
+
+class DocumentSelection(BaseModel):
+    document_ids: list[Annotated[str, Field(pattern=r"^[0-9a-f]{32}$")]] = Field(
+        min_length=1, max_length=1000
+    )
+
+
+class UploadFailure(BaseModel):
+    filename: str = Field(max_length=255)
+    error: str = Field(max_length=2000)
+    provider: str = Field(default="", max_length=255)
+
+
+class ReportSelection(BaseModel):
+    document_ids: list[Annotated[str, Field(pattern=r"^[0-9a-f]{32}$")]] = Field(
+        default_factory=list, max_length=1000
+    )
+    upload_errors: list[UploadFailure] = Field(default_factory=list, max_length=1000)
+
+
+class RunCreate(BaseModel):
+    backend: str
+    filenames: list[Annotated[str, Field(min_length=1, max_length=255)]] = Field(
+        min_length=1, max_length=1000
+    )
+
+
+class RunUploadFailure(BaseModel):
+    position: int = Field(ge=0, le=999)
+    error: str = Field(max_length=2000)
+
+
+class RunFinish(BaseModel):
+    failures: list[RunUploadFailure] = Field(default_factory=list, max_length=1000)

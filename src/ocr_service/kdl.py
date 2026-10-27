@@ -50,11 +50,13 @@ class KDLEngine:
 
     def __init__(self, settings: Settings):
         manifest = verify_kdl(settings)
-        configure_offline_environment(settings.cpu_threads, settings.data_dir / "cache")
+        configure_offline_environment(
+            settings.default_cpu_policy.threads, settings.data_dir / "cache"
+        )
         import torch
         from transformers import AutoProcessor, Qwen2VLForConditionalGeneration
 
-        torch.set_num_threads(settings.cpu_threads)
+        torch.set_num_threads(settings.default_cpu_policy.threads)
         self.settings = settings
         directory = settings.models_dir / "kdl"
         self.processor = AutoProcessor.from_pretrained(directory, local_files_only=True)
@@ -73,7 +75,7 @@ class KDLEngine:
             "torch": torch.__version__,
             "manifest": manifest,
             "context": 8192,
-            "cpu_threads": settings.cpu_threads,
+            "cpu_threads": settings.default_cpu_policy.threads,
             "pipeline": "layout-crop-recognize-OTSL",
             "temperature": 0,
             "coordinates": "pixels of rendered page; model boxes normalized 0–1000",

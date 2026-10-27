@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Annotated, Literal
 from uuid import uuid4
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile
 from fastapi import Path as PathParam
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
@@ -19,8 +19,20 @@ from .config import Settings
 from .db import Database
 from .exports import html_document, markdown_document
 from .lifecycle import finalize_if_worker_absent
+from .preview import render_preview
 from .processing import document_path, validate_pdf
-from .schemas import TERMINAL_STATUSES, Comparison, DocumentResult, JobSummary, WorkerStatus
+from .reports import html_report, processing_report
+from .schemas import (
+    TERMINAL_STATUSES,
+    Comparison,
+    DocumentResult,
+    DocumentSelection,
+    JobSummary,
+    ReportSelection,
+    RunCreate,
+    RunFinish,
+    WorkerStatus,
+)
 
 JobId = Annotated[str, PathParam(pattern=r"^[0-9a-f]{32}$")]
 
@@ -141,11 +153,34 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def upload_document(
         file: Annotated[UploadFile, File(description="PDF документ")],
         backend: Annotated[str, Form()] = "paddle",
+        run_id: Annotated[str | None, Form(pattern=r"^[0-9a-f]{32}$")] = None,
+        file_index: Annotated[int | None, Form(ge=0, le=999)] = None,
     ):
         validate_backends([backend])
-        return await save_upload(file, backend)
+        if (run_id is None) != (file_index is None):
+            raise HTTPException(422, "Укажите запуск и позицию файла вместе")
+        if run_id is not None:
+            item = db.run_file(run_id, file_index)
+            if item is None:
+                raise HTTPException(404, "Файл запуска не найден")
+            if item["backend"] != backend:
+                raise HTTPException(409, "Провайдер не совпадает с провайдером запуска")
+            if item["job_id"]:
+                await file.close()
+                require_job(item["job_id"])
+                return db.summary(item["job_id"])
+            if item["status"] == "accepted":
+                raise HTTPException(410, "Документ запуска удалён")
+        return await save_upload(file, backend, run_id=run_id, file_index=file_index)
 
-    async def save_upload(file: UploadFile, backend: str, comparison_id: str | None = None):
+    async def save_upload(
+        file: UploadFile,
+        backend: str,
+        comparison_id: str | None = None,
+        *,
+        run_id: str | None = None,
+        file_index: int | None = None,
+    ):
         job_id = uuid4().hex
         directory = document_path(settings, job_id)
         directory.mkdir(parents=True)
@@ -178,6 +213,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "config": settings.recognition_config(),
                 "backend": backend,
                 "comparison_id": comparison_id,
+                "run_id": run_id,
+                "file_index": file_index,
             }
             if comparison_id is None:
                 db.create_jobs([record])
@@ -229,6 +266,102 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def list_documents():
         return db.recent()
 
+    def require_run(run_id: str) -> dict:
+        run = db.run_details(run_id)
+        if run is None:
+            raise HTTPException(404, "Запуск не найден")
+        return run
+
+    @app.post("/api/runs", status_code=201)
+    def create_run(selection: RunCreate):
+        validate_backends([selection.backend])
+        return require_run(db.create_run(selection.backend, selection.filenames))
+
+    @app.get("/api/runs")
+    def list_runs(
+        limit: Annotated[int, Query(ge=1, le=100)] = 20,
+        offset: Annotated[int, Query(ge=0)] = 0,
+    ):
+        return db.runs(limit, offset)
+
+    @app.get("/api/runs/{run_id}")
+    def get_run(run_id: JobId):
+        return require_run(run_id)
+
+    @app.post("/api/runs/{run_id}/finish-upload")
+    def finish_upload(run_id: JobId, selection: RunFinish):
+        require_run(run_id)
+        db.finish_run_upload(run_id, [item.model_dump() for item in selection.failures])
+        return require_run(run_id)
+
+    @app.post("/api/documents/status")
+    def document_statuses(selection: DocumentSelection):
+        documents, missing = [], []
+        for job_id in dict.fromkeys(selection.document_ids):
+            try:
+                require_job(job_id)
+                documents.append(db.summary(job_id))
+            except (HTTPException, KeyError):
+                missing.append(job_id)
+        return {"documents": documents, "missing": missing}
+
+    @app.post("/api/reports")
+    def report(selection: ReportSelection, format: Literal["json", "html"] = "html"):
+        return report_response(selection, format)
+
+    def report_response(selection: ReportSelection, format: str, run: dict | None = None):
+        if not selection.document_ids and not selection.upload_errors:
+            raise HTTPException(422, "Выберите документы для отчёта")
+        snapshots = []
+        for job_id in dict.fromkeys(selection.document_ids):
+            job = require_job(job_id)
+            snapshots.append(
+                DocumentResult(
+                    document=db.summary(job_id),
+                    engine=json.loads(job["engine_json"]),
+                    pages=db.pages(job_id),
+                )
+            )
+        value = processing_report(snapshots)
+        value["upload_errors"] = [item.model_dump() for item in selection.upload_errors]
+        value["totals"]["upload_errors"] = len(selection.upload_errors)
+        if run is not None:
+            value["run"] = {key: run[key] for key in ("id", "created_at", "backend")}
+            value["complete"] = value["complete"] and not any(
+                item["status"] == "pending" for item in run["files"]
+            )
+        if format == "html":
+            content, media = html_report(value), "text/html"
+        else:
+            content, media = json.dumps(value, ensure_ascii=False, indent=2), "application/json"
+        return Response(
+            content,
+            media_type=media,
+            headers={
+                "Content-Disposition": f'attachment; filename="ocr-processing-report.{format}"',
+            },
+        )
+
+    @app.get("/api/runs/{run_id}/report")
+    def run_report(run_id: JobId, format: Literal["json", "html"] = "html"):
+        run = require_run(run_id)
+        return report_response(
+            ReportSelection(
+                document_ids=[item["job_id"] for item in run["files"] if item["job"]],
+                upload_errors=[
+                    {
+                        "filename": item["filename"],
+                        "provider": run["backend"],
+                        "error": item["error"] or "Файл ещё не загружен",
+                    }
+                    for item in run["files"]
+                    if not item["job"]
+                ],
+            ),
+            format,
+            run,
+        )
+
     @app.get("/api/documents/{job_id}", response_model=JobSummary)
     def get_document(job_id: JobId):
         require_job(job_id)
@@ -257,6 +390,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/api/documents/{job_id}/result", response_model=DocumentResult)
     def get_result(job_id: JobId):
         return result_for(job_id)
+
+    @app.get("/api/documents/{job_id}/pages/{number}/preview")
+    def page_preview(job_id: JobId, number: Annotated[int, PathParam(ge=1)]):
+        result = result_for(job_id)
+        page = next((page for page in result.pages if page.number == number), None)
+        if page is None:
+            raise HTTPException(404, "Страница не найдена")
+        return {"html": render_preview(page.markdown or page.text)}
 
     @app.get("/api/documents/{job_id}/download")
     def download(job_id: JobId, format: Literal["json", "markdown", "html"] = "json"):

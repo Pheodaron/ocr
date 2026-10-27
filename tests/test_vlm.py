@@ -8,6 +8,7 @@ from unittest.mock import Mock
 import numpy as np
 import pytest
 
+from ocr_service.cpu import CPUPolicy
 from ocr_service.engine import Prediction
 from ocr_service.processing import process_job
 from ocr_service.vlm import VLMEngine, server_command
@@ -153,7 +154,13 @@ def test_local_multimodal_http_contract_and_cpu_server_lifecycle(
 
     manifest = {"model": "model.gguf", "projector": "projector.gguf"}
     monkeypatch.setattr(vlm, "verify_vlm", lambda *_args: manifest)
-    monkeypatch.setattr(vlm, "physical_cpu_ids", lambda *_: [0, 2, 4, 6, 8, 10, 12, 14])
+    from ocr_service import config
+
+    def fixture_policy(requested, reserve_cores):
+        ids = list(range(0, 16, 2)) if requested == "auto" else list(range(requested))
+        return CPUPolicy(len(ids), ids, 32, None)
+
+    monkeypatch.setattr(config, "cpu_policy", fixture_policy)
     monkeypatch.setattr(VLMEngine, "_version", lambda _self: "test-fixture")
     monkeypatch.setattr(vlm.subprocess, "Popen", Process)
     engine = VLMEngine(settings, backend)
@@ -190,7 +197,8 @@ def test_local_multimodal_http_contract_and_cpu_server_lifecycle(
             assert engine.metadata["cpu_threads"] == 8
             assert engine.metadata["cpu_affinity"] == [0, 2, 4, 6, 8, 10, 12, 14]
         else:
-            assert "--cpu-mask" not in command
+            assert command[command.index("--cpu-mask") + 1] == "fffff"
+            assert recorded["environment"]["OMP_NUM_THREADS"] == "20"
         expected_flash_attention = (
             "auto" if backend in {"dots_mocr", "surya", "lighton", "lighton_small"} else "off"
         )

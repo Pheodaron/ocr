@@ -13,11 +13,11 @@ def configuration_details(backend: str, config: dict) -> dict:
         else config.get("lighton_small_quantization", "Q8_0")
         if backend == "lighton_small"
         else "Q8_0"
-        if backend in {"glm_ocr", "lighton", "lighton_small", "jina"}
+        if backend in {"glm_ocr", "lighton", "lighton_small"}
         else "Q5_K_M"
         if backend == "chandra"
         else "FP32"
-        if backend in {"kdl", "falcon", "nemotron"}
+        if backend in {"kdl", "falcon"}
         else "F16"
         if backend == "surya"
         else None,
@@ -70,10 +70,6 @@ def create_engine(backend: str, settings: Settings):
         from .falcon import FalconEngine
 
         return FalconEngine(settings)
-    if backend == "nemotron":
-        from .nemotron import NemotronEngine
-
-        return NemotronEngine(settings)
     if backend in VLM_BACKENDS:
         from .vlm import VLMEngine
 

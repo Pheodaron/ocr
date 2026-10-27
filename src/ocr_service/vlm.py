@@ -18,7 +18,6 @@ from pathlib import Path
 import pymupdf
 
 from .config import Settings
-from .cpu import physical_cpu_ids
 from .engine import InferenceProcessError, Prediction
 from .vlm_models import model_directory, verify_vlm
 
@@ -39,7 +38,7 @@ def parent_death_signal(cpu_ids=None):
 def server_command(settings: Settings, backend: str, manifest: dict, *, cpu_ids=None) -> list[str]:
     directory = model_directory(backend, settings).resolve()
     context = context_size(settings, backend)
-    threads = settings.lighton_small_threads if backend == "lighton_small" else settings.cpu_threads
+    threads = settings.inference_cpu_policy(backend).threads
     if cpu_ids:
         threads = min(threads, len(cpu_ids))
     affinity = []
@@ -133,17 +132,11 @@ class VLMEngine:
         self.settings = settings
         self.backend = backend
         self.cpu_ids = (
-            physical_cpu_ids(settings.lighton_small_threads)
-            if backend == "lighton_small" and settings.lighton_small_pin_threads
+            settings.inference_cpu_policy(backend).cpu_ids
+            if backend != "lighton_small" or settings.lighton_small_pin_threads
             else None
         )
-        self.cpu_threads = (
-            min(settings.lighton_small_threads, len(self.cpu_ids))
-            if self.cpu_ids
-            else settings.lighton_small_threads
-            if backend == "lighton_small"
-            else settings.cpu_threads
-        )
+        self.cpu_threads = settings.inference_cpu_policy(backend).threads
         self.process = None
         self.log = None
         manifest = verify_vlm(backend, settings)
@@ -158,10 +151,6 @@ class VLMEngine:
             "lighton": lambda: "grounding",
             "lighton_small": lambda: (
                 "grounding" if settings.lighton_small_task == "grounding" else ""
-            ),
-            "jina": lambda: (
-                "Transcribe the provided document image into a clean Markdown format, "
-                "preserving the natural reading order."
             ),
             "surya": lambda: (
                 "OCR this image to HTML. Each block is a div with data-label and data-bbox "
@@ -216,15 +205,14 @@ class VLMEngine:
                 probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
                 probe.bind(("127.0.0.1", self.settings.llama_port))
             environment = dict(os.environ)
-            if self.backend == "lighton_small":
-                for key in (
-                    "OMP_NUM_THREADS",
-                    "OPENBLAS_NUM_THREADS",
-                    "MKL_NUM_THREADS",
-                    "NUMEXPR_NUM_THREADS",
-                    "RAYON_NUM_THREADS",
-                ):
-                    environment[key] = str(self.cpu_threads)
+            for key in (
+                "OMP_NUM_THREADS",
+                "OPENBLAS_NUM_THREADS",
+                "MKL_NUM_THREADS",
+                "NUMEXPR_NUM_THREADS",
+                "RAYON_NUM_THREADS",
+            ):
+                environment[key] = str(self.cpu_threads)
             self.process = subprocess.Popen(
                 server_command(self.settings, self.backend, self.manifest, cpu_ids=self.cpu_ids),
                 stdout=self.log,

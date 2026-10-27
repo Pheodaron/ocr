@@ -8,25 +8,10 @@ from functools import partial
 import pytest
 
 from ocr_service.backends import configuration_details
-from ocr_service.cpu import physical_cpu_ids
 from ocr_service.models import ModelsUnavailable
 from ocr_service.vlm import parent_death_signal
 from ocr_service.vlm_adapter import adapt_vlm
 from ocr_service.vlm_models import artifacts, prepare_vlm, verify_vlm
-
-
-def test_physical_core_selection_obeys_cpuset_and_separates_cpu_packages(tmp_path, monkeypatch):
-    monkeypatch.setattr(os, "sched_getaffinity", lambda _: {1, 3, 4, 6, 8, 9})
-    topology = {1: (0, 0), 3: (0, 0), 4: (0, 1), 6: (0, 1), 8: (1, 0), 9: (1, 0)}
-    for cpu, (package, core) in topology.items():
-        directory = tmp_path / f"cpu{cpu}" / "topology"
-        directory.mkdir(parents=True)
-        (directory / "physical_package_id").write_text(str(package))
-        (directory / "core_id").write_text(str(core))
-    assert physical_cpu_ids(8, tmp_path) == [1, 4, 8]
-    assert physical_cpu_ids(2, tmp_path) == [1, 4]
-    (tmp_path / "cpu1/topology/core_id").unlink()
-    assert physical_cpu_ids(8, tmp_path) is None
 
 
 def test_native_child_inherits_physical_affinity_without_changing_parent():
@@ -102,14 +87,14 @@ def test_new_jobs_use_q4_transcription_and_old_jobs_keep_q8_grounding(client, pd
     assert job["configuration"]["quantization"] == "Q4_K_M"
     assert job["configuration"]["task"] == "transcription"
     snapshot = json.loads(client.app.state.db.claim_job()["config_json"])
-    assert snapshot["lighton_small_threads"] == 8 and snapshot["lighton_small_pin_threads"]
+    assert snapshot["lighton_small_threads"] == "auto" and snapshot["lighton_small_pin_threads"]
     legacy = {"cpu_threads": 20, "dpi": settings.dpi}
     restored = settings.restore_recognition_config(legacy)
     spec = artifacts("lighton_small", restored)
     assert spec["quantization"] == "Q8_0"
     assert restored.lighton_small_task == "grounding"
     assert configuration_details("lighton_small", legacy)["task"] == "grounding"
-    assert restored.lighton_small_threads == 8
+    assert restored.lighton_small_threads == "auto"
 
 
 def test_transcription_preserves_html_and_markdown_tables_without_fabricating_boxes():

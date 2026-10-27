@@ -34,15 +34,6 @@ def artifacts(backend: str, settings: Settings) -> dict:
             }[settings.lighton_small_quantization],
             "a8b9b3b01b6c780747b48e0807ef5b753c54f27aa4c23962c3c7d5ace2ed0233",
         ),
-        "jina": (
-            "ahmadw/jina-ocr-v1-GGUF",
-            "333253b2ff8f3d9357d155327bee5dc98e007829",
-            "Q8_0",
-            "jina-ocr-v1-Q8_0.gguf",
-            "mmproj-jina-ocr-v1-F16.gguf",
-            "2612fc330ad777ffbbd2a095aad41081ad18be70bfe1bcf42b3a295fad0b6041",
-            "3a2bdc5303c9845e5d35e5175781d7eb81bf28ee212170944cf3ad9d27d37c01",
-        ),
         "surya": (
             "datalab-to/surya-ocr-2-gguf",
             "6a3a4c30e5e74446d4f8b6afd05b2f2da970f470",

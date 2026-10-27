@@ -1,9 +1,12 @@
+from functools import cached_property
 from pathlib import Path
+from typing import Literal
 
 from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from .catalog import LABELS
+from .cpu import CPUPolicy, cpu_policy
 
 
 class Settings(BaseSettings):
@@ -11,10 +14,12 @@ class Settings(BaseSettings):
 
     data_dir: Path = Path("data")
     models_dir: Path = Path("models")
-    cpu_threads: int = Field(4, ge=1, le=128)
+    cpu_threads: Literal["auto"] | int = "auto"
+    cpu_reserve_cores: int = Field(1, ge=0, le=128)
+    cpu_nice: int = Field(10, ge=0, le=19)
     lighton_small_quantization: str = "Q4_K_M"
     lighton_small_task: str = "transcription"
-    lighton_small_threads: int = Field(8, ge=1, le=8)
+    lighton_small_threads: Literal["auto"] | int = "auto"
     lighton_small_pin_threads: bool = True
     dpi: int = Field(250, ge=72, le=600)
     retry_dpi: int = Field(350, ge=72, le=600)
@@ -47,6 +52,10 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_dpi(self):
+        for name in ("cpu_threads", "lighton_small_threads"):
+            value = getattr(self, name)
+            if value != "auto" and not 1 <= value <= 1024:
+                raise ValueError(f"{name}: use auto or 1–1024")
         if self.lighton_small_quantization not in {"Q8_0", "Q4_K_M"}:
             raise ValueError("lighton_small_quantization: use Q8_0 or Q4_K_M")
         if self.lighton_small_task not in {"transcription", "grounding"}:
@@ -65,10 +74,26 @@ class Settings(BaseSettings):
             raise ValueError("kv_cache_type: use f16 or q8_0")
         return self
 
+    @cached_property
+    def default_cpu_policy(self) -> CPUPolicy:
+        return cpu_policy(self.cpu_threads, self.cpu_reserve_cores)
+
+    @cached_property
+    def lighton_cpu_policy(self) -> CPUPolicy:
+        return cpu_policy(self.lighton_small_threads, self.cpu_reserve_cores)
+
+    def inference_cpu_policy(self, backend: str) -> CPUPolicy:
+        return self.lighton_cpu_policy if backend == "lighton_small" else self.default_cpu_policy
+
     @property
     def backends(self) -> list[str]:
+        # Existing .env files may still contain a removed backend in the default list.
         return list(
-            dict.fromkeys(item.strip() for item in self.enabled_backends.split(",") if item.strip())
+            dict.fromkeys(
+                item.strip()
+                for item in self.enabled_backends.split(",")
+                if item.strip() and item.strip() not in {"nemotron", "jina"}
+            )
         )
 
     @property
@@ -108,6 +133,8 @@ class Settings(BaseSettings):
                 "layout_threshold",
                 "max_page_pixels",
                 "cpu_threads",
+                "cpu_reserve_cores",
+                "cpu_nice",
                 "lighton_small_quantization",
                 "lighton_small_task",
                 "lighton_small_threads",

@@ -40,7 +40,7 @@ KDL реализован через исходный CPU checkpoint и двух�
 Every model has its own Compose service/profile and backend-filtered SQLite queue.
 A missing or stopped worker leaves only its own jobs waiting. Each document runs
 in a child process so loaded models release RAM when the document finishes.
-Nemotron has a separate dependency environment; Jina has a separate patched binary.
+Jina and Nemotron support is currently removed.
 Surya uses the original model's official F16 GGUF, as explicitly selected by the user.
 Falcon requires a CPU port of upstream Triton operations; real-weight validation
 is pending because Hugging Face downloads are blocked in this environment.

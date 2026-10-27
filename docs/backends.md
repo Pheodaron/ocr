@@ -39,7 +39,7 @@ Raw JSON сохраняется в `data/documents/ID/page-N-DPI.raw.json`.
 Рендер зависит от backend: Paddle использует `OCR_DPI=250` и при необходимости
 `OCR_RETRY_DPI=350`; все остальные модели — `OCR_VLM_DPI=150`, один проход
 без повышения DPI даже при ошибке/пустом ответе. Это DPI рендера PDF, а не
-восстановление детализации исходного скана. KDL, Falcon и Nemotron далее
+восстановление детализации исходного скана. KDL и Falcon далее
 применяют свои штатные image processors.
 
 Paddle выдаёт OCR score. У генеративных моделей `confidence=null`,
@@ -257,10 +257,8 @@ dots/GLM — MIT; LightOnOCR-3 — Apache-2.0; KDL — AGPL-3.0 по карто�
 | Backend / профиль | Модель | Веса / образ |
 | --- | --- | --- |
 | `lighton_small` | [lightonai/LightOnOCR-3-0.8B](https://huggingface.co/lightonai/LightOnOCR-3-0.8B) | [prithivMLmods Q4_K_M](https://huggingface.co/prithivMLmods/LightOnOCR-3-0.8B-GGUF), прежний Q8 vision; Q8 decoder доступен для сравнения; образ `vlm` |
-| `jina` | [jinaai/jina-ocr-v1](https://huggingface.co/jinaai/jina-ocr-v1) | [GGUF ahmadw](https://huggingface.co/ahmadw/jina-ocr-v1-GGUF), Q8_0 + mmproj F16; отдельный образ `jina` |
 | `surya` | [datalab-to/surya-ocr-2](https://huggingface.co/datalab-to/surya-ocr-2) | [Официальный GGUF](https://huggingface.co/datalab-to/surya-ocr-2-gguf), decoder и mmproj F16; образ `vlm` |
 | `falcon` | [tiiuae/Falcon-OCR](https://huggingface.co/tiiuae/Falcon-OCR), v1.5 | Исходные safetensors, FP32; отдельный образ `falcon` |
-| `nemotron` | [nvidia/Nemotron-3.5-Parse](https://huggingface.co/nvidia/Nemotron-3.5-Parse) | Исходные safetensors, FP32; отдельный образ `nemotron` |
 
 ### LightOnOCR-3-0.8B
 
@@ -270,22 +268,6 @@ dots/GLM — MIT; LightOnOCR-3 — Apache-2.0; KDL — AGPL-3.0 по карто�
 Самостоятельный checkpoint на базе Qwen3.5. Он не использует decoder или projector
 версии 1B. Маршрут: render → llama.cpp → transcription либо grounding → Markdown/HTML.
 Нормализованные bbox доступны в grounding. Адаптер общий с 1B, веса и сервисы разные.
-
-### Jina OCR v1
-
-DeepSeek OCR MoE: число активных параметров не равно размеру хранимых весов.
-Используются исправленные Q8_0-веса от 12 октября, pinned revision
-`333253b2ff8f3d9357d155327bee5dc98e007829`.
-В отдельной сборке llama.cpp удалена устаревшая проверка `rope_theta == 10000`
-в `deepseek2.cpp`: модель задаёт 1000000, а операция RoPE уже принимает значение
-из конфига. Изменение явно записывается в metadata как `jina-rope-theta`.
-Остальные модели используют стандартный бинарник.
-
-Промпт просит транскрипцию страницы в Markdown с порядком чтения. HTML и pipe
-таблицы разбираются в cells; ведущие нули и пустые значения сохраняются.
-FastMTP из исходного runtime в GGUF-маршруте не используется. Лицензия исходной
-модели **CC-BY-NC-4.0**, поэтому этот вариант не подходит для произвольного
-коммерческого внедрения без отдельного разрешения правообладателя.
 
 ### Surya OCR 2
 
@@ -317,27 +299,3 @@ CPU-математика проверена тестами относитель�
 считать подтверждённым результатом рейтинга. Уменьшение страницы до 1024 может
 ухудшать мелкий текст. Upstream `generate` не сообщает причину завершения,
 поэтому raw содержит `finish_reason=unknown` и предупреждение. Лицензия Apache-2.0.
-
-### Nemotron 3.5 Parse
-
-Используется именно релиз **3.5**, checkpoint
-`nvidia/Nemotron-3.5-Parse`, revision
-`41897c0ae2fe5d9b461b207bb13587ed54d2740c`.
-Это C-RADIOv4-SO400M vision encoder и десятислойный mBART decoder с GQA.
-
-Алгоритм: PDF render → RGB → штатный AutoProcessor с динамической прямоугольной
-предобработкой NaViT → AutoModel на CPU FP32/eager → greedy generation →
-штатный `postprocess_document` → Markdown с HTML-таблицами и structured blocks.
-Используется управляющий промпт
-`</s><s><predict_bbox><predict_classes><output_markdown><predict_text_in_pic>`.
-Лимит выхода — минимум из `OCR_VLM_MAX_TOKENS` и 8744; применяется generation
-max_time. Исходная сериализация и блоки с bbox сохраняются в raw JSON.
-HTML-таблицы проходят общий sanitizer и преобразуются в cells с объединениями.
-Это один проход на страницу, без triple-pass/region-union из ParseBench.
-
-Изолированный образ содержит Transformers 5.14.1, PyTorch 2.11.0+cpu,
-torchvision 0.26.0+cpu, timm 1.0.22 и BeautifulSoup 4.13.3. Он отделён от
-KDL/Falcon с другой версией Transformers. CUDA, vLLM и MTP не используются.
-NVIDIA публикует GPU-примеры; CPU-интеграция и скорость на реальном checkpoint
-в этом окружении ещё не подтверждены. Лицензия OpenMDW-1.1, tokenizer MIT;
-атрибуции скачиваются вместе с pinned snapshot.

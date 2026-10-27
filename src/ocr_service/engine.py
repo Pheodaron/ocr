@@ -73,7 +73,9 @@ class Prediction:
 class PaddleEngine:
     def __init__(self, settings: Settings):
         manifest = verify_models(settings.models_dir)
-        configure_offline_environment(settings.cpu_threads, settings.data_dir / "cache")
+        configure_offline_environment(
+            settings.default_cpu_policy.threads, settings.data_dir / "cache"
+        )
         from paddleocr import PPStructureV3
 
         self.models_dir = settings.models_dir
@@ -81,7 +83,7 @@ class PaddleEngine:
             self.pipeline = PPStructureV3(
                 paddlex_config=pipeline_config(settings),
                 device="cpu",
-                cpu_threads=settings.cpu_threads,
+                cpu_threads=settings.default_cpu_policy.threads,
                 enable_mkldnn=True,
             )
         self.metadata = {
@@ -91,7 +93,7 @@ class PaddleEngine:
             "paddlepaddle": importlib.metadata.version("paddlepaddle"),
             "models": MODEL_ROLES,
             "manifest": manifest,
-            "cpu_threads": settings.cpu_threads,
+            "cpu_threads": settings.default_cpu_policy.threads,
         }
 
     def recognize(self, image, *, layout_threshold: float | None = None) -> Prediction:

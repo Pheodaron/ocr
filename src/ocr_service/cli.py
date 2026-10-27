@@ -51,7 +51,7 @@ def main() -> None:
                         manifest = verify_models(settings.models_dir)
                     else:
                         manifest = prepare_models(settings.models_dir, allow_download=args.download)
-                elif backend in {"falcon", "nemotron"}:
+                elif backend == "falcon":
                     from .hf_models import prepare_hf, verify_hf
 
                     manifest = (

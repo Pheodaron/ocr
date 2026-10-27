@@ -14,13 +14,6 @@ RUN --mount=type=secret,id=proxy_ca \
       -DLLAMA_CURL=OFF -DLLAMA_OPENSSL=OFF -DLLAMA_BUILD_TESTS=OFF \
     && cmake --build /build --target llama-server -j 2
 
-# Jina uses DeepSeek OCR with rope_theta=1e6. The downstream operation already
-# consumes the configured frequency; remove the obsolete 10000-only assertion.
-FROM llama-build AS llama-jina-build
-RUN test "$(grep -F -c 'GGML_ASSERT(fabs(freq_base - 10000.0) < 1e-4);' /src/src/models/deepseek2.cpp)" = 1 \
-    && sed -i 's/GGML_ASSERT(fabs(freq_base - 10000.0) < 1e-4);/\/\/ Jina OCR: honor configured rope_theta, including 1e6./' /src/src/models/deepseek2.cpp \
-    && cmake --build /build --target llama-server -j 2
-
 FROM python:3.12-slim-bookworm AS base
 
 ENV PYTHONUNBUFFERED=1 \
@@ -87,24 +80,10 @@ RUN --mount=type=secret,id=proxy_ca --mount=type=cache,target=/root/.cache/uv \
 USER 10001:10001
 CMD ["ocr-service", "worker"]
 
-FROM base AS jina
-COPY --from=llama-jina-build /build/bin/llama-server /usr/local/bin/llama-server
-COPY --from=llama-jina-build /src/LICENSE /usr/local/share/licenses/llama.cpp-MIT.txt
-ENV OCR_LLAMA_PATCH=jina-rope-theta
-CMD ["ocr-service", "worker"]
-
 FROM base AS falcon
 USER root
 RUN --mount=type=secret,id=proxy_ca --mount=type=cache,target=/root/.cache/uv \
     if [ -f /run/secrets/proxy_ca ]; then export SSL_CERT_FILE=/run/secrets/proxy_ca; fi; \
     uv sync --frozen --extra falcon --no-dev --no-install-project
-USER 10001:10001
-CMD ["ocr-service", "worker"]
-
-FROM base AS nemotron
-USER root
-RUN --mount=type=secret,id=proxy_ca --mount=type=cache,target=/root/.cache/uv \
-    if [ -f /run/secrets/proxy_ca ]; then export SSL_CERT_FILE=/run/secrets/proxy_ca; fi; \
-    uv sync --frozen --extra nemotron --no-dev --no-install-project
 USER 10001:10001
 CMD ["ocr-service", "worker"]

@@ -12,6 +12,7 @@ from .config import Settings
 from .db import Database
 from .engine import InferenceProcessError
 from .schemas import PageResult
+from .telemetry import ResourceMonitor, timed_stage
 
 LOGGER = logging.getLogger(__name__)
 
@@ -75,6 +76,12 @@ def atomic_json(path: Path, value: dict) -> None:
     os.replace(temporary, path)
 
 
+class PageProcessingError(RuntimeError):
+    def __init__(self, passes):
+        self.passes = passes
+        super().__init__("; ".join(item["error"] or "" for item in passes))
+
+
 def process_page(
     engine,
     source: Path,
@@ -91,40 +98,54 @@ def process_page(
     backend = backend or getattr(engine, "backend", settings.worker_backend)
     dpis = settings.render_dpis(backend)
     for dpi in dpis:
+        attempt = {"dpi": dpi, "confidence": None, "error": None, "stages": []}
+        passes.append(attempt)
+        stages = attempt["stages"]
         try:
-            image = render_page(source, number, dpi, settings.max_page_pixels)
+            with timed_stage(
+                stages,
+                "render_pdf",
+                renderer="PyMuPDF",
+                page=number,
+                dpi=dpi,
+                colorspace="RGB",
+                alpha=False,
+                max_pixels=settings.max_page_pixels,
+                output="BGR uint8 array",
+            ) as details:
+                image = render_page(source, number, dpi, settings.max_page_pixels)
+                details.update(width=image.shape[1], height=image.shape[0])
             if selected is None:
-                save_image(image, directory / f"page-{number}.png")
-            prediction = engine.recognize(image, layout_threshold=settings.layout_threshold)
+                with timed_stage(stages, "save_input_image", format="PNG"):
+                    save_image(image, directory / f"page-{number}.png")
+            with timed_stage(
+                stages, "recognize", backend=backend, layout_threshold=settings.layout_threshold
+            ):
+                prediction = engine.recognize(image, layout_threshold=settings.layout_threshold)
             processed = prediction.image
-            raw = json.loads(json.dumps(prediction.raw, default=json_default))
-            atomic_json(directory / f"page-{number}-{dpi}.raw.json", raw)
-            if prediction.format == "kdl":
-                from .vlm_adapter import adapt_kdl
+            with timed_stage(stages, "save_raw_result", format="JSON"):
+                raw = json.loads(json.dumps(prediction.raw, default=json_default))
+                atomic_json(directory / f"page-{number}-{dpi}.raw.json", raw)
+            with timed_stage(stages, "parse_result", format=prediction.format):
+                if prediction.format == "kdl":
+                    from .vlm_adapter import adapt_kdl
 
-                candidate = adapt_kdl(raw, number, dpi, processed.shape[1], processed.shape[0])
-            elif prediction.format == "vlm":
-                from .vlm_adapter import adapt_vlm
+                    candidate = adapt_kdl(raw, number, dpi, processed.shape[1], processed.shape[0])
+                elif prediction.format == "vlm":
+                    from .vlm_adapter import adapt_vlm
 
-                candidate = adapt_vlm(raw, number, dpi, processed.shape[1], processed.shape[0])
-            else:
-                candidate = adapt_prediction(
-                    raw,
-                    number,
-                    dpi,
-                    processed.shape[1],
-                    processed.shape[0],
-                    settings.review_threshold,
-                )
+                    candidate = adapt_vlm(raw, number, dpi, processed.shape[1], processed.shape[0])
+                else:
+                    candidate = adapt_prediction(
+                        raw,
+                        number,
+                        dpi,
+                        processed.shape[1],
+                        processed.shape[0],
+                        settings.review_threshold,
+                    )
             candidate.metrics.update(prediction.metrics)
-            passes.append(
-                {
-                    "dpi": dpi,
-                    "confidence": candidate.confidence,
-                    "error": None,
-                    "metrics": candidate.metrics,
-                }
-            )
+            attempt.update(confidence=candidate.confidence, metrics=dict(candidate.metrics))
             # Keep the retry only when confidence improves without substantial text loss.
             if (
                 selected is None
@@ -142,7 +163,7 @@ def process_page(
                 break
         except Exception as error:
             LOGGER.exception("Page %s failed at %s dpi", number, dpi)
-            passes.append({"dpi": dpi, "confidence": None, "error": str(error)[:1000]})
+            attempt["error"] = str(error)[:1000]
             if selected is not None:
                 selected.needs_review = True
                 selected.warnings.append(f"Повторный проход {dpi} dpi завершился ошибкой")
@@ -151,10 +172,13 @@ def process_page(
                 # again with an even larger image in the current page's DPI retry.
                 break
     if selected is None:
-        raise RuntimeError("; ".join(item["error"] or "" for item in passes))
+        raise PageProcessingError(passes)
     selected.passes = passes
-    selected.seconds = round(time.monotonic() - started, 3)
-    save_image(selected_image, directory / f"page-{number}.png")
+    finalization = []
+    with timed_stage(finalization, "save_result_image", format="PNG", dpi=selected.dpi):
+        save_image(selected_image, directory / f"page-{number}.png")
+    selected.metrics["finalization"] = finalization
+    selected.seconds = round(time.monotonic() - started, 6)
     return selected
 
 
@@ -181,25 +205,28 @@ def process_job(
             db.record_timings(job_id, processing=time.monotonic() - processing_started)
             return
         started = time.monotonic()
-        try:
-            result = process_page(
-                engine, source, page.number, directory, settings, backend=job["backend"]
-            )
-            result.attempts = attempts
-            result.image_url = f"/api/documents/{job_id}/pages/{page.number}/image"
-        except Exception as error:
-            # Page failures are durable results, never an early return from the document.
-            LOGGER.exception("Document %s page %s failed", job_id, page.number)
-            result = PageResult(
-                number=page.number,
-                status="failed",
-                error=str(error)[:2000],
-                needs_review=True,
-                attempts=attempts,
-                seconds=round(time.monotonic() - started, 3),
-            )
-            if (directory / f"page-{page.number}.png").is_file():
+        with ResourceMonitor() as monitor:
+            try:
+                result = process_page(
+                    engine, source, page.number, directory, settings, backend=job["backend"]
+                )
+                result.attempts = attempts
                 result.image_url = f"/api/documents/{job_id}/pages/{page.number}/image"
+            except Exception as error:
+                # Page failures are durable results, never an early return from the document.
+                LOGGER.exception("Document %s page %s failed", job_id, page.number)
+                result = PageResult(
+                    number=page.number,
+                    status="failed",
+                    error=str(error)[:2000],
+                    needs_review=True,
+                    attempts=attempts,
+                    seconds=round(time.monotonic() - started, 6),
+                    passes=getattr(error, "passes", []),
+                )
+                if (directory / f"page-{page.number}.png").is_file():
+                    result.image_url = f"/api/documents/{job_id}/pages/{page.number}/image"
+        result.metrics["resources"] = monitor.metrics()
         db.save_page(job_id, result)
     db.record_timings(job_id, processing=time.monotonic() - processing_started)
     if not db.cancellation_requested(job_id):

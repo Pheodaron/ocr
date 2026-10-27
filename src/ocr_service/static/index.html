@@ -13,24 +13,40 @@
       <div><p class="eyebrow">Документы · русский / английский</p><h1>Распознавание PDF</h1></div>
       <span id="worker-state" class="badge">Проверка сервиса…</span>
     </header>
-    <section class="card">
+    <section class="card upload-card">
       <form id="upload-form">
-        <label for="pdf">Выберите PDF с текстом и таблицами</label>
-        <fieldset><legend>Конфигурации для сравнения</legend><div id="backends">Загрузка конфигураций…</div></fieldset>
-        <div class="upload-row"><input id="pdf" name="file" type="file" accept="application/pdf,.pdf" required>
-          <button id="upload-button" type="submit">Распознать</button></div>
+        <div class="upload-fields">
+          <div class="provider-field">
+            <label for="backend">Провайдер OCR</label>
+            <select id="backend" name="backend" aria-describedby="backend-status" required disabled>
+              <option value="">Загрузка провайдеров…</option>
+            </select>
+          </div>
+          <div class="file-field">
+            <label for="pdf">PDF с текстом и таблицами</label>
+            <input id="pdf" name="file" type="file" accept="application/pdf,.pdf" multiple required>
+          </div>
+          <button id="upload-button" type="submit" disabled>Распознать все</button>
+        </div>
+        <p id="backend-status" class="muted" role="status" aria-live="polite">Проверка доступности провайдеров…</p>
         <p id="limits" class="muted">Обработка выполняется на CPU. Можно закрыть страницу и вернуться позже.</p>
       </form>
       <p id="message" role="status" aria-live="polite"></p>
       <p id="worker-error" class="error" hidden></p>
     </section>
-    <section id="comparison" class="card" hidden>
-      <h2>Сравнение на одном PDF</h2>
-      <p class="muted">Запускайте нужные сервисы по одному через Compose-профили. Задания выключенных моделей ждут в очереди. Время обработки не включает очередь и загрузку модели. Число ячеек не является оценкой качества.</p>
-      <div class="table-scroll"><table><thead><tr><th>Конфигурация</th><th>Статус</th><th>Загрузка, с</th><th>Обработка, с</th><th>Таблицы / ячейки</th><th>Генерация, ток/с</th><th>Результат</th></tr></thead><tbody id="comparison-rows"></tbody></table></div>
-      <a id="comparison-json">Скачать статусы сравнения JSON</a>
+
+    <section class="card runs-section">
+      <div class="section-heading"><h2>Запуски</h2><button id="refresh" type="button" class="secondary">Обновить</button></div>
+      <p id="runs-message" class="muted" role="status" aria-live="polite">Загрузка запусков…</p>
+      <div id="runs-list"></div>
+      <button id="more-runs" type="button" class="secondary" hidden>Показать ещё</button>
     </section>
-    <section id="job" class="card" hidden>
+    <footer><a href="/docs">Документация API</a><span>Результаты сохраняются на сервере</span></footer>
+  </main>
+  <dialog id="document-dialog" aria-labelledby="filename">
+    <div class="modal-toolbar"><span class="muted">Результат документа</span><button id="close-document" type="button" class="secondary" autofocus>Закрыть</button></div>
+    <p id="document-message" class="muted" role="status" aria-live="polite"></p>
+    <div id="job" class="document-content" hidden>
       <div class="section-heading"><h2 id="filename"></h2><span id="job-state" class="badge"></span></div>
       <div id="job-actions" class="job-actions"></div>
       <progress id="progress" max="1" value="0" aria-label="Прогресс распознавания"></progress>
@@ -38,14 +54,10 @@
       <p id="engine-details" class="muted"></p>
       <div id="downloads" class="downloads" hidden>
         <a data-format="json">Скачать JSON</a><a data-format="markdown">Скачать Markdown</a><a data-format="html">Скачать HTML</a>
+        <button id="document-report" type="button" class="secondary">Отчёт обработки HTML</button>
       </div>
       <div id="pages"></div>
-    </section>
-    <section class="card">
-      <div class="section-heading"><h2>Последние документы</h2><button id="refresh" class="secondary">Обновить</button></div>
-      <ul id="history"><li class="muted">Загрузка…</li></ul>
-    </section>
-    <footer><a href="/docs">Документация API</a><span>Результаты сохраняются на сервере</span></footer>
-  </main>
+    </div>
+  </dialog>
 </body>
 </html>

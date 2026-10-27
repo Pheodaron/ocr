@@ -63,7 +63,9 @@ cp .env.example .env
 
 ```dotenv
 OCR_PORT=8000
-OCR_CPU_THREADS=4
+OCR_CPU_THREADS=auto
+OCR_CPU_RESERVE_CORES=1
+OCR_CPU_NICE=10
 OCR_DPI=250
 OCR_RETRY_DPI=350
 OCR_VLM_DPI=150
@@ -74,7 +76,8 @@ OCR_VLM_MAX_PIXELS=2500000
 OCR_DOTS_MAX_PIXELS=2500000
 ```
 
-`OCR_CPU_THREADS` выбирайте с учётом ресурсов хоста. Для GLM не начинайте
+`OCR_CPU_THREADS=auto` учитывает доступные CPU и квоты контейнера; одно физическое
+ядро оставляется системе. Ручное число потоков задаёт верхний предел. Для GLM не начинайте
 с контекста 131072: он значительно увеличивает KV-cache и расход RAM.
 
 `OCR_ENABLED_BACKENDS` управляет списком в API и клиенте. Оставленный полный
@@ -198,10 +201,8 @@ JSON/Markdown/HTML; ZIP, офисные документы и XLSX в этот �
 | LightOnOCR-3-1B Q8_0 | `lighton` | `lighton` | `vlm` |
 | KDL nano FP32 | `kdl` | `kdl` | `kdl` |
 | LightOnOCR-3-0.8B Q8_0 | `lighton_small` | `lighton-small` | `vlm` |
-| Jina OCR v1 Q8_0 | `jina` | `jina` | `jina` |
 | Surya OCR 2 F16 | `surya` | `surya` | `vlm` |
 | Falcon-OCR 1.5 FP32 | `falcon` | `falcon` | `falcon` |
-| Nemotron 3.5 Parse FP32 | `nemotron` | `nemotron` | `nemotron` |
 
 Полное имя образа: `localhost/document-ocr-<образ runtime>:0.1.0`.
 Подготовка весов каждого worker называется `models-<worker-сервис>`.
@@ -216,19 +217,27 @@ podman compose stop glm-ocr
 podman compose --profile dots_mocr up --build -d
 # После завершения dots.mocr:
 podman compose stop dots-mocr
-podman compose --profile nemotron up --build -d
+podman compose --profile falcon up --build -d
 ```
 
-Для сравнения отметьте несколько моделей в клиенте и загрузите PDF один раз.
+В клиенте выберите одного провайдера и один или несколько PDF. Для сравнения
+нескольких провайдеров используйте API `/api/comparisons` с одним PDF.
 Работающий сервис выполнит свою часть, остальные задания останутся в очереди
 до запуска соответствующих сервисов. После переключения результаты появятся
 в том же сравнении. Автоматического переключения контейнеров нет.
+
+Для пакетной обработки нажмите «Распознать все»: каждый PDF загружается и
+ставится в очередь отдельно. Раскройте нужный запуск в списке «Запуски»:
+внутри находятся документы, их статусы и общий отчёт HTML/JSON. Нажатие на имя
+документа открывает результаты в модальном окне. Отчёт содержит время страниц, модель, ресурсы
+и этапы от рендера PDF с DPI и размерами до разбора результата. До завершения
+всех заданий он является промежуточным. Подробности измерений: [README](../README.md).
 
 Пример создания сравнения через API:
 
 ```sh
 curl -fsS -F 'file=@document.pdf' \
-  -F 'backends=glm_ocr' -F 'backends=dots_mocr' -F 'backends=nemotron' \
+  -F 'backends=glm_ocr' -F 'backends=dots_mocr' -F 'backends=falcon' \
   http://127.0.0.1:8000/api/comparisons
 # Подставьте id сравнения из ответа:
 COMPARISON_ID=вставьте_id_сравнения
@@ -259,8 +268,11 @@ podman compose --profile glm_ocr up -d
 | `OCR_GLM_TASK` | `text` для страницы или `table` для табличного запроса |
 | `OCR_LIGHTON_SMALL_QUANTIZATION` | prithivMLmods `Q4_K_M` по умолчанию или прежний `Q8_0`; [LightOn 0.8B на CPU](lighton-q4.md) |
 | `OCR_LIGHTON_SMALL_TASK` | `transcription` (пустой промпт) или `grounding` |
-| `OCR_LIGHTON_SMALL_THREADS` | 8 по умолчанию; диапазон 1–8 для LightOn 0.8B, независимо от общего `OCR_CPU_THREADS` |
-| `OCR_LIGHTON_SMALL_PIN_THREADS` | true: по одному разрешённому CPU на физическое ядро; фактическая маска в engine.cpu_affinity |
+| `OCR_LIGHTON_SMALL_THREADS` | `auto` по умолчанию; либо верхний предел 1–1024 для LightOn 0.8B |
+| `OCR_CPU_THREADS` | `auto` по умолчанию; либо верхний предел 1–1024 для остальных моделей |
+| `OCR_CPU_RESERVE_CORES` | 1 физическое ядро вместе с SMT-потоками для системы |
+| `OCR_CPU_NICE` | 10: пониженный приоритет инференса, диапазон 0–19 |
+| `OCR_LIGHTON_SMALL_PIN_THREADS` | true: дополнительные CPU-mask флаги llama.cpp; общий резерв процесса действует также при false |
 | `OCR_DPI`, `OCR_RETRY_DPI` | Только PP-StructureV3: основной рендер 250 dpi и повтор 350 dpi |
 | `OCR_VLM_DPI` | Все остальные модели: рендер 150 dpi, один проход без повышения DPI при ошибке |
 | `OCR_VLM_MAX_PIXELS` | Максимальная площадь изображения для llama.cpp, по умолчанию 2 500 000: сохраняет A4/Letter при 150 dpi без уменьшения; preview сохраняет исходный DPI |
@@ -363,7 +375,7 @@ cp backup/pipeline.env .env
 
 ## 8. Перенести на машину без интернета
 
-Ниже пример для GLM и Nemotron: образы обоих вариантов переносятся заранее,
+Ниже пример для GLM и Falcon: образы обоих вариантов переносятся заранее,
 но на целевой машине модели запускаются по одной. Podman и Compose provider
 должны быть установлены на целевой машине заранее. Архитектура обеих машин — x86_64.
 
@@ -372,11 +384,11 @@ cp backup/pipeline.env .env
 Из каталога проекта:
 
 ```sh
-podman compose --profile glm_ocr --profile nemotron build
+podman compose --profile glm_ocr --profile falcon build
 OCR_ALLOW_MODEL_DOWNLOAD=true podman compose --profile glm_ocr run --rm models-glm-ocr
-OCR_ALLOW_MODEL_DOWNLOAD=true podman compose --profile nemotron run --rm models-nemotron
+OCR_ALLOW_MODEL_DOWNLOAD=true podman compose --profile falcon run --rm models-falcon
 mkdir -p offline/images
-for image in api vlm nemotron; do
+for image in api vlm falcon; do
   podman save --format oci-archive \
     --output "offline/images/ocr-$image.tar" \
     "localhost/document-ocr-$image:0.1.0"
@@ -391,7 +403,7 @@ git rev-parse HEAD > offline/revision.txt
 вместе с manifest и владельцами файлов; не нужно вручную копировать отдельные GGUF.
 Для других профилей подготовьте их `models-*` и добавьте runtime-образ из таблицы.
 `api` нужен всегда. Для dots, Chandra, обеих LightOn и Surya используется
-тот же `vlm`; для Jina нужен собственный образ `jina`.
+тот же `vlm`.
 
 Перенесите весь каталог `offline/` доступным вам способом.
 
@@ -421,11 +433,11 @@ podman compose --profile glm_ocr logs -f models-glm-ocr glm-ocr
 
 Подготовка теперь только проверяет локальные файлы. `--no-build` исключает
 сборку; все нужные образы уже должны быть загружены. Workers работают без внешней
-сети. Для переключения на Nemotron:
+сети. Для переключения на Falcon:
 
 ```sh
 podman compose stop glm-ocr
-OCR_ALLOW_MODEL_DOWNLOAD=false podman compose --profile nemotron up -d --no-build
+OCR_ALLOW_MODEL_DOWNLOAD=false podman compose --profile falcon up -d --no-build
 ```
 
 Для этого варианта `.git` не переносится: обновления доставляются новым архивом
@@ -458,7 +470,7 @@ OCR_ALLOW_MODEL_DOWNLOAD=false podman compose --profile nemotron up -d --no-buil
 
 ```sh
 podman ps -a
-podman compose --profile nemotron logs --tail=100 models-nemotron nemotron api
+podman compose --profile falcon logs --tail=100 models-falcon falcon api
 ```
 
 Если dots.mocr работает слишком долго или убит OOM-killer, начните новый
@@ -483,7 +495,7 @@ A4 при 150 dpi даёт примерно 1241×1754 px (2,18 млн пикс�
 исходный режим для текста 10–12 pt; точность зависит от качества скана.
 Не оставляйте старые значения 1000000/1500000 в `.env`: они уменьшат A4
 ниже выбранных 150 dpi. Для остальных llama.cpp моделей действует общий
-лимит; KDL/Falcon/Nemotron используют свои processors.
+лимит; KDL/Falcon используют свои processors.
 Для мелкого текста можно поднять DPI до 200, но оба лимита для dots тогда
 должны быть не ниже 4000000, чтобы сохранить A4 без уменьшения.
 Это увеличивает нагрузку и RAM. Генерация длинного JSON/HTML на CPU тоже
@@ -567,7 +579,7 @@ ssh -L 8000:127.0.0.1:8000 user@ocr-host
 ```sh
 mise trust
 mise install
-OCR_WORKER_BACKEND=nemotron mise run up
+OCR_WORKER_BACKEND=falcon mise run up
 # Для остановки всех профилей используйте команду из раздела 6.
 ```
 
@@ -577,7 +589,7 @@ OCR_WORKER_BACKEND=nemotron mise run up
 
 Сборки и контракты проверены, но настоящее распознавание всех моделей и их
 CPU-производительность ещё не подтверждены: загрузка весов заблокирована
-в окружении разработки. В частности, Falcon использует отдельную CPU-адаптацию,
-Nemotron — новый custom runtime. Не принимайте HTTP 202 или успешную сборку
+в окружении разработки. В частности, Falcon использует отдельную CPU-адаптацию.
+Не принимайте HTTP 202 или успешную сборку
 за подтверждение OCR-качества. Детали: [проверки](validation.md),
 [алгоритмы и ограничения моделей](backends.md), [лицензии](../THIRD_PARTY_NOTICES.md).

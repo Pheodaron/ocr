@@ -5,21 +5,34 @@
 <section class="card"><p>Асинхронное распознавание PDF. <a href="/openapi.json">Автоматическая схема OpenAPI JSON</a>.</p>
 <div class="table-scroll"><table><thead><tr><th>Метод</th><th>Путь</th><th>Результат</th></tr></thead><tbody>
 <tr><td>POST</td><td>/api/documents</td><td>multipart/form-data: file, backend (по умолчанию paddle). Ответ 202: ID и начальный статус.</td></tr>
+<tr><td>POST</td><td>/api/runs</td><td>JSON: backend, filenames (1–1000 имён). Создать запуск перед загрузкой файлов; ответ 201 с ID и составом.</td></tr>
+<tr><td>GET</td><td>/api/runs?limit=20&amp;offset=0</td><td>Список запусков со статусами и признаком has_more. limit: 1–100.</td></tr>
+<tr><td>GET</td><td>/api/runs/{id}</td><td>Документы запуска: принятые задания, ошибки, ещё не загруженные и удалённые файлы.</td></tr>
+<tr><td>POST</td><td>/api/runs/{id}/finish-upload</td><td>JSON: failures [{position,error}]. Сохранить ошибки и завершить загрузку запуска.</td></tr>
+<tr><td>GET</td><td>/api/runs/{id}/report?format=html|json</td><td>Скачать отчёт только этого запуска, включая ошибки загрузки и удалённые документы.</td></tr>
 <tr><td>POST</td><td>/api/comparisons</td><td>file и повторяемое поле backends. Ответ 202: ID сравнения и задания всех конфигураций.</td></tr>
 <tr><td>GET</td><td>/api/comparisons/{id}</td><td>Статусы и время прогонов одного PDF.</td></tr>
 <tr><td>GET</td><td>/api/config</td><td>Доступные движки, квантизации и лимиты.</td></tr>
 <tr><td>GET</td><td>/api/documents</td><td>Последние 30 заданий.</td></tr>
+<tr><td>POST</td><td>/api/documents/status</td><td>JSON: document_ids (1–1000 ID). Статусы выбранных документов и список missing для удалённых.</td></tr>
+<tr><td>POST</td><td>/api/reports?format=html|json</td><td>JSON: document_ids (до 1000 ID), необязательные upload_errors. Отчёт: страницы, время, модель, CPU/RAM и пайплайн. Поддерживает промежуточный снимок активных заданий.</td></tr>
 <tr><td>GET</td><td>/api/documents/{id}</td><td>Статус и количество обработанных, успешных, ошибочных страниц.</td></tr>
 <tr><td>POST</td><td>/api/documents/{id}/cancel</td><td>Остановить задание, включая текущую страницу. Ответ 202: cancelling или cancelled; завершённые задания сохраняют свой статус.</td></tr>
 <tr><td>DELETE</td><td>/api/documents/{id}</td><td>Удалить PDF и результаты при любом статусе. Работающий процесс сначала останавливается. Ответ 200: deleted или 202: deleting. Задание сразу исчезает из списков.</td></tr>
 <tr><td>GET</td><td>/api/documents/{id}/result</td><td>JSON результата. Ответ 409, пока обработка не завершена.</td></tr>
 <tr><td>GET</td><td>/api/documents/{id}/download?format=json|markdown|html</td><td>Скачать результат файлом.</td></tr>
 <tr><td>GET</td><td>/api/documents/{id}/pages/{number}/image</td><td>PNG страницы с исправленной ориентацией. Нумерация с 1.</td></tr>
+<tr><td>GET</td><td>/api/documents/{id}/pages/{number}/preview</td><td>Очищенный HTML-предпросмотр Markdown/HTML результата страницы.</td></tr>
 <tr><td>GET</td><td>/health</td><td>Работоспособность API и сведения о worker.</td></tr>
 <tr><td>GET</td><td>/ready</td><td>200, если координатор очереди отвечает; иначе 503. Веса загружаются при выполнении задания.</td></tr>
 </tbody></table></div>
 <p>Загрузка:</p><pre>curl -F 'file=@document.pdf' http://localhost:8000/api/documents</pre>
 <p>Получение результата:</p><pre>curl http://localhost:8000/api/documents/ID/result</pre>
+<p>Отчёт обработки нескольких документов:</p><pre>curl -X POST -H 'Content-Type: application/json' \
+  -d '{"document_ids":["ID_ПЕРВОГО","ID_ВТОРОГО"]}' \
+  'http://localhost:8000/api/reports?format=html' -o report.html</pre>
+<p>Клиент создаёт запуск и загружает каждый PDF отдельным запросом POST /api/documents с backend, run_id и file_index (индекс от 0). Ошибка одного файла не отменяет остальные задания. Повторная загрузка той же позиции возвращает уже созданное задание. Запуски, состав файлов, ошибки и результаты хранятся на сервере; документ открывается из запуска в модальном окне.</p>
+<p>Новые результаты содержат pages[].passes[].stages (рендер PDF, DPI и размеры, сохранение PNG, предобработка/инференс, запись raw JSON и разбор), pages[].metrics.resources (CPU seconds и пик суммы RSS по замерам через 100 мс) и engine.cpu_policy (потоки, affinity, nice, квота). Время страницы исключает очередь и загрузку модели. Неизмеренные данные старых результатов не восстанавливаются задним числом.</p>
 <p>Статусы: queued → processing → completed / partial / failed. Остановка: cancelling → cancelled. Готовые страницы остановленного задания доступны в результате и выгрузках; необработанные имеют статус cancelled. partial означает, что часть страниц не обработана. needs_review — независимый признак необходимости проверки распознавания.</p>
 <p>Координаты: [x_min, y_min, x_max, y_max], в пикселях изображения страницы после исправления ориентации. OCR score не является вероятностью достоверности значения.</p>
 <p>Для генеративного OCR confidence = null и needs_review = true. Координаты могут быть null; исходный layout dots остаётся в raw-ответе на сервере. Статистика generation находится в pages[].metrics, исходные ответы — page-N-DPI.raw.json в каталоге задания.</p>
